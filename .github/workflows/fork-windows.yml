@@ -1,0 +1,80 @@
+name: Fork Windows installer
+
+on:
+  push:
+    branches:
+      - codex/windows-installer
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:win
+      - name: Verify packaged browser
+        run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
+      - name: Verify packaged server
+        env:
+          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/server
+        run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/release/win-unpacked/resources/browser-engine"
+      - name: Verify fork update feed and packaged resources
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          test -f "$res/server/index.js"
+          test -f "$res/server/desktop-entry.mjs"
+          test -f "$res/ui/index.html"
+          test -f "$res/cloudflared/cloudflared.exe"
+          test -f "$res/app-update.yml"
+          grep -Fxq 'owner: TrashCan-Design' "$res/app-update.yml"
+          grep -Fxq 'repo: OpenMausBot' "$res/app-update.yml"
+          if grep -q 'publisherName' "$res/app-update.yml"; then
+            echo '::error::Unsigned installer must not claim a publisher'
+            exit 1
+          fi
+      - name: Check packaged server starts
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
+            OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 1 90); do
+            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
+              kill "$pid" 2>/dev/null || true
+              exit 0
+            fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/server.log"
+          kill "$pid" 2>/dev/null || true
+          exit 1
+      - name: Record installer SHA-256 and source commit
+        shell: bash
+        run: |
+          sha256sum release/*.exe > release/SHA256SUMS.txt
+          git rev-parse HEAD > release/SOURCE_COMMIT.txt
+          cat release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-windows-installer
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
+            release/SOURCE_COMMIT.txt
+          if-no-files-found: error
+          retention-days: 14
