@@ -225,7 +225,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
           });
         }
       }
-      if (patch.box) return json(res, 410, { error: "Boat is unavailable in OpenBot" });
+      if (Object.hasOwn(patch, "box")) return json(res, 410, { error: "Boat is unavailable in OpenBot" });
       const currentBoatToken = cfg.box?.token?.trim() ?? "";
       const nextBoatToken = patch.box?.token === undefined ? currentBoatToken : patch.box.token;
       const changingBoatToken = patch.box?.token !== undefined && nextBoatToken !== currentBoatToken;
