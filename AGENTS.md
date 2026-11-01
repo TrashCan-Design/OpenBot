@@ -1,4 +1,12 @@
-# OpenMausBot agent notes
+# OpenBot agent notes
+
+## Upstream maintenance
+
+On the first work session each calendar day, fetch `milind-soni/OpenMausBot` and
+compare its latest commit with this fork before editing. Review upstream fixes
+against the features this fork retains, port applicable fixes without restoring
+removed vendor hosting or Boat integrations, and run the affected checks. Record
+the checked commit and decisions in `docs/upstream-sync.md`.
 
 Before claiming a server or conversation change works, follow
 [`docs/verification/README.md`](docs/verification/README.md). Always launch an

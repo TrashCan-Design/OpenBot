@@ -8,6 +8,7 @@ import {
   Cloud,
   Download,
   FolderOpen,
+  Github,
   Gauge,
   Info,
   HelpCircle,
@@ -23,14 +24,11 @@ import {
   Zap,
 } from "lucide-react";
 
-import { AccountMoveStatus, useAccountMove, type AccountMoveKind } from "./AccountMove";
+import { AccountMoveStatus, type AccountMoveKind } from "./AccountMove";
 import { InitialsAvatar } from "./Avatar";
-import { DiscordIcon } from "./DiscordIcon";
 import { AboutDialog } from "./AboutDialog";
 import { PhoneAppDialog } from "./PhoneAppDialog";
 import { CloudTile } from "./cloud-buy/parts";
-import { usageBridge } from "./CloudUsageMeter";
-import { useCloudPlanSnapshot } from "./CloudTrialNotice";
 import type { WorkspacePlace } from "./DesktopWorkspaceSwitcher";
 import { railShown, usePlaces } from "@/lib/places";
 import { useAutomationsNeedYou } from "./SidebarFooterNav";
@@ -483,7 +481,7 @@ export function profileMenuItems({
 }): SidebarMenuItem[] {
   const help: SidebarMenuItem[] = [
     { key: "help", label: t("sidebar.menu.help"), icon: <HelpCircle size={18} />, onSelect: onHelp },
-    { key: "feedback", label: t("sidebar.menu.feedback"), icon: <DiscordIcon size={17} />, onSelect: onFeedback },
+    { key: "feedback", label: t("sidebar.menu.feedback"), icon: <Github size={17} />, onSelect: onFeedback },
     {
       key: "shortcuts",
       label: t("sidebar.menu.shortcuts"),
@@ -550,12 +548,10 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
   const { state, dispatch } = useStore();
   const simple = account !== undefined;
   const [menuOpen, setMenuOpen] = useState(false);
-  const cloudUsage = cloudUsageSummary(useCloudPlanSnapshot(simple ? usageBridge(state.config?.cloudHome === true) : undefined));
-  const engineUsage = usePlanUsageSummary(simple && menuOpen && cloudUsage === null && window.ogb?.remoteClient?.active !== true);
+  const engineUsage = usePlanUsageSummary(simple && menuOpen && window.ogb?.remoteClient?.active !== true);
   const phone = useSidebarPhoneStatus();
   const connectPhone = useConnectPhoneEntry(state.config?.cloudHome === true);
-  const cloudPhone = useCloudPhoneDestination(connectPhone?.target === "computer");
-  const destinations = phoneDestinations(connectPhone, cloudPhone.cloud);
+  const destinations = phoneDestinations(connectPhone, null);
   const desktopUpdate = useUpdateItem();
   const serverUpdate = useServerUpdateItem(!window.ogb?.updater);
   const update = desktopUpdate ?? serverUpdate;
@@ -574,13 +570,11 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
 
   const profile = profileForSession(state.config?.profile, session);
   const name = profileLabel(profile);
-  const connectTo = (destination: PhoneDestination) => selectPhoneDestination(destination, { bridge: cloudPhone.bridge, dispatch });
+  const connectTo = (destination: PhoneDestination) => selectPhoneDestination(destination, { dispatch });
   const remote = window.ogb?.remoteClient?.active === true;
   const besideRail = railShown(usePlaces());
   const filesReady = useCloudFilesReady();
-  const cloudAccount = !remote && Boolean(window.ogb?.cloudAccount || (window.ogb?.cloudPlan && state.config?.cloudHome === true));
-  const openCloudAccount = () => dispatch({ type: "toggleAppSettings", open: true, section: "cloudAccount" });
-  const move = useAccountMove(state.config?.cloudHome === true, { onOpen: openCloudAccount, onPairPhone: () => dispatch(phonePairingSettingsAction()) });
+  const move = { kind: null as AccountMoveKind | null, items: [] as SidebarMenuItem[], place: undefined };
 
   const items = profileMenuItems({
     phone: simple
@@ -592,11 +586,11 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
         onGetApp: () => setPhoneAppOpen(true),
       }),
     usage: !remote,
-    usageSummary: cloudUsage ?? engineUsage,
+    usageSummary: engineUsage,
     update: update?.item ?? null,
     updateTop: simple ? simpleUpdateTop(update) : null,
     move: move.items,
-    account: cloudAccount ? t("settings.section.cloudAccount") : null,
+    account: null,
     ...(account ? { simple: {
       tools: toolMenuItems({
         activeView: state.activeView,
@@ -606,7 +600,7 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
         onFiles: filesReady ? () => dispatch({ type: "showFiles" }) : undefined,
         archived: account.archived,
       }),
-      places: placeMenuItems(account.place, { owner: account.owner, name: state.config?.team?.name, besideRail, onCloudSettings: openCloudAccount }),
+      places: placeMenuItems(account.place, { owner: account.owner, name: state.config?.team?.name, besideRail, onCloudSettings: () => dispatch({ type: "toggleAppSettings", open: true, section: "desktopWorkspaces" }) }),
     } } : {}),
     onUsage: () => dispatch({ type: "toggleAppSettings", open: true, section: "usage" }),
     onSettings: () => dispatch({ type: "toggleAppSettings" }),
@@ -617,7 +611,7 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
     onAbout: () => setAboutOpen(true),
     onHelp: () => void openExternalLink(HELP_CENTER_URL),
     onFeedback: () => void openExternalLink(FEEDBACK_URL),
-    onAccount: openCloudAccount,
+    onAccount: () => dispatch({ type: "toggleAppSettings", open: true, section: "general" }),
   });
   const noteworthy = update && updateNoteworthy(update.phase, update.pending) && !updateHasButton(update.phase);
   const needsYou = account?.automationsNeedYou === true;

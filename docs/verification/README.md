@@ -163,9 +163,6 @@ The [optional organization connection smoke](organization-settings.md) checks
 the real Settings panel and production desktop client against a synthetic
 Admin server, including cancellation, revocation and unchanged normal startup.
 
-The [personal Cloud account smoke](cloud-account.md) checks optional browser
-sign-in, server-verified Pro status and sign-out in a disposable Electron profile.
-
 The [rail of Clouds](cloud-rail.md) checks the session's list of Clouds, which
 pages may read the rail, opening a place by its id, hiding the rail, and buying
 another Cloud, with a loopback Admin and the real app in a disposable preview.

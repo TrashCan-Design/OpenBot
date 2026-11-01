@@ -17,8 +17,6 @@ import { ActivitySection } from "./ActivitySection";
 import { BuiltInBrowserRow } from "./BrowserSettingsRows";
 import { LoginsSettings } from "./LoginsSettings";
 import { OrganizationSettings } from "./OrganizationSettings";
-import { CloudPlanRow, CloudPlanFootnote, useCloudPlan } from "./ProIntroduction";
-import { CloudUsageDetails, CloudUsageSummaryView, useCloudUsageSettings } from "./CloudUsageMeter";
 import { SettingRow, SettingsDisclosureRow, SettingsGroup, SettingsRows } from "./SettingsPrimitives";
 import { UsageSection } from "./UsageSection";
 import { PlanUsageSummary } from "./PlanUsage";
@@ -53,7 +51,6 @@ export function SimpleGeneralPage({ has, peopleOpen, onLooks }: { has: Has; peop
         <SettingsGroup label={t("settings.group.account")} block="general">
           <SettingsRows>
             {has("general") && <ProfileSummaryRow />}
-            {has("general") && <CloudPlanRow place="account" />}
             {has("people") && <div data-settings-block="people" className="scroll-mt-4"><PeopleSection simple startOpen={peopleOpen} /></div>}
           </SettingsRows>
         </SettingsGroup>
@@ -114,7 +111,7 @@ export function SimpleAiPage({ has, disclose, connections }: { has: Has; disclos
       {has("engines") && <div data-settings-block="engines" className="flex scroll-mt-4 flex-col gap-7"><AdminOnly><EnginesSettings simple more={disclose("ai-more")} /></AdminOnly></div>}
       {has("connections") && (
         <AdminOnly>
-          <SettingsDisclosureRow title={t("settings.simple.ai.keys")} block="connections" {...disclose("ai-keys")}>
+          <SettingsDisclosureRow title={t("settings.section.connections")} block="connections" {...disclose("ai-keys")}>
             {connections}
           </SettingsDisclosureRow>
         </AdminOnly>
@@ -152,27 +149,12 @@ export function SimpleComputerPage({ has, remoteAccess, servers, disclose }: { h
   );
 }
 
-export function SimpleBillingPage({ has, disclose, cloudAccount }: { has: Has; disclose: Disclose; cloudAccount: ReactNode }) {
-  const { usage, upgrade, dialog } = useCloudUsageSettings();
-  const plan = useCloudPlan();
-  const signedOut = plan?.view.kind === "signed-out" || plan?.view.kind === "removed";
+export function SimpleBillingPage({ has }: { has: Has; disclose?: Disclose; cloudAccount?: ReactNode }) {
   return (
     <>
-      <div data-settings-block="usage" className="scroll-mt-4">
-        {usage ? <CloudUsageSummaryView usage={usage} upgrade={upgrade}>{dialog}</CloudUsageSummaryView> : <AdminOnly note="settings.adminOnly.usage"><PlanUsageSummary /></AdminOnly>}
-      </div>
-      {(usage || has("usage")) && (
-        <SettingsDisclosureRow title={t("settings.simple.billing.limits")} {...disclose("billing-limits")}>
-          {usage && <CloudUsageDetails usage={usage} upgrade={upgrade} />}
-          {has("usage") && <AdminOnly note="settings.adminOnly.usage"><UsageSection /></AdminOnly>}
-        </SettingsDisclosureRow>
-      )}
-      {has("cloudAccount") && (
-        <SettingsGroup label={t("settings.simple.billing.plan")} block="cloudAccount" footnote={<CloudPlanFootnote />}>
-          <SettingsRows><CloudPlanRow place="plan" usage={usage} upgrade={upgrade} /></SettingsRows>
-          {signedOut ? null : <div className="flex flex-col gap-4">{cloudAccount}</div>}
-        </SettingsGroup>
-      )}
+      {has("usage") && <div data-settings-block="usage" className="scroll-mt-4">
+        <AdminOnly note="settings.adminOnly.usage"><PlanUsageSummary /><UsageSection /></AdminOnly>
+      </div>}
     </>
   );
 }

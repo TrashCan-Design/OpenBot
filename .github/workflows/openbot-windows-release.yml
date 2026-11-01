@@ -1,0 +1,115 @@
+# A version bump on main publishes the Windows installer and the updater feed
+# from the same commit. The first run must wait until the repository is renamed
+# and the new OpenBot release process is approved.
+name: OpenBot Windows release
+
+on:
+  push:
+    branches: [main]
+    paths: [package.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openbot-windows-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Check release version and repository
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "TrashCan-Design/OpenBot" || {
+            echo "::error::Rename the fork to TrashCan-Design/OpenBot before publishing"; exit 1; }
+          current=$(node -p "require('./package.json').version")
+          [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::Expected a stable semantic version"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            previous=$(git show HEAD^:package.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')
+            if [ "$previous" = "$current" ]; then
+              echo "Version is unchanged; no installer needed"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if gh release view "v$current" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::v$current already exists; bump the version instead"; exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "value=$current" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+        if: steps.version.outputs.publish == 'true'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.version.outputs.publish == 'true'
+        with:
+          node-version: 24
+          cache: pnpm
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm package:win
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - name: Verify installer and update feed
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          res=release/win-unpacked/resources
+          test -s "release/OpenBot-$VERSION-setup.exe"
+          test -s "release/OpenBot-$VERSION-setup.exe.blockmap"
+          test -s release/latest.yml
+          test -s "$res/server/index.js"
+          test -s "$res/server/desktop-entry.mjs"
+          test -s "$res/ui/index.html"
+          test -s "$res/app-update.yml"
+          grep -Fxq 'owner: TrashCan-Design' "$res/app-update.yml"
+          grep -Fxq 'repo: OpenBot' "$res/app-update.yml"
+          node --input-type=module - "$VERSION" <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, statSync } from 'node:fs';
+          import { parse } from 'yaml';
+          const version = process.argv[2], file = `OpenBot-${version}-setup.exe`;
+          const feed = parse(readFileSync('release/latest.yml', 'utf8'));
+          const entry = feed.files?.find((item) => item.url === file);
+          if (feed.version !== version || !entry || entry.size !== statSync(`release/${file}`).size ||
+            entry.sha512 !== createHash('sha512').update(readFileSync(`release/${file}`)).digest('base64')) {
+            throw new Error('The updater feed does not match the installer');
+          }
+          EOF
+      - name: Verify packaged browser and server
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          node scripts/smoke-browser-bundle.mjs --resources "$GITHUB_WORKSPACE/release/win-unpacked/resources"
+          OMB_SMOKE_DIST="$GITHUB_WORKSPACE/release/win-unpacked/resources/server" node scripts/smoke-packaged-server.mjs --browser-bundle "$GITHUB_WORKSPACE/release/win-unpacked/resources/browser-engine"
+      - name: Publish updater-compatible GitHub Release
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum "OpenBot-$VERSION-setup.exe" > SHA256SUMS.txt
+          gh release create "v$VERSION" \
+            "OpenBot-$VERSION-setup.exe" "OpenBot-$VERSION-setup.exe.blockmap" latest.yml SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "OpenBot $VERSION" --generate-notes --draft
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -4,7 +4,7 @@ import type { NotificationLogEntry, NotifyKind } from "../shared/notification.ts
 import { readTeamRolesWith } from "./chief-level.ts";
 import { MAUSBOT_TOOL_DEFINITIONS, MAUSBOT_TOOL_NAMES } from "./drivers/agents-mausbot-tools.ts";
 import { listUnread, markRead, type NotificationsHost } from "./mausbot-notifications.ts";
-import { createMausBotNotificationRoutes } from "./routes/mausbot-notifications.ts";
+import { createOpenBotNotificationRoutes } from "./routes/mausbot-notifications.ts";
 import { PASS } from "./routes/table.ts";
 import type { BotRecord } from "./store.ts";
 
@@ -126,7 +126,7 @@ describe("the internal route", () => {
   async function call(botId: string, method: string, path: string, body?: unknown) {
     const { host, rows } = setup([entry("a", "done"), entry("b", "question")], [MAUS, { id: "pip", name: "Pip" } as BotRecord]);
     const json = vi.fn();
-    const outcome = await createMausBotNotificationRoutes(host)({ method, path, res: {} as never, json, botId, readBody: async () => body });
+    const outcome = await createOpenBotNotificationRoutes(host)({ method, path, res: {} as never, json, botId, readBody: async () => body });
     const [, status, payload] = json.mock.calls[0] ?? [];
     return { outcome, status: status as number | undefined, payload: payload as { text?: string; error?: string } | undefined, rows };
   }

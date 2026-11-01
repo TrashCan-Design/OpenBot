@@ -83,7 +83,7 @@ export function createUpdaterCoordinator(
       setState({
         status: "error",
         retryable: false,
-        message: `${updateErrorMessage(error)} Quit and reopen OpenMausBot before trying the update again.`,
+        message: `${updateErrorMessage(error)} Quit and reopen OpenBot before trying the update again.`,
       });
       return;
     }
@@ -110,7 +110,8 @@ export function createUpdaterCoordinator(
   }
 
   updater.on("checking-for-update", () => {
-    if (checkOwnsState()) setState({ status: "checking" });
+    // The banner shows nothing while checking, so a quiet check must not replace the notice; a manual retry still shows it.
+    if (checkOwnsState() && (checkOperation?.manual || quietFailures < QUIET_FAILURES_BEFORE_NOTICE)) setState({ status: "checking" });
   });
   updater.on("update-available", (info) => {
     quietFailures = 0;
@@ -184,13 +185,13 @@ export function createUpdaterCoordinator(
     try {
       operation.promise = Promise.resolve(updater.checkForUpdates())
         .catch((error) => {
-          if (!operation.supersededByDownload && !(operation.recheck && !operation.manual)) handleRejectedOperation(operation.manual, error);
+          if (!operation.failed && !operation.supersededByDownload && !(operation.recheck && !operation.manual)) handleRejectedOperation(operation.manual, error);
         })
         .finally(() => {
           if (checkOperation === operation) checkOperation = null;
         });
     } catch (error) {
-      if (!operation.supersededByDownload && !(operation.recheck && !operation.manual)) handleRejectedOperation(operation.manual, error);
+      if (!operation.failed && !operation.supersededByDownload && !(operation.recheck && !operation.manual)) handleRejectedOperation(operation.manual, error);
       checkOperation = null;
       operation.promise = Promise.resolve();
     }
@@ -259,7 +260,7 @@ export function createUpdaterCoordinator(
     operation.timer = setTimeout(() => {
       if (installOperation !== operation) return;
       updater.logger?.warn?.("Update restart handoff exceeded two minutes; keeping installation locked to prevent overlapping retries.");
-      setState({ status: "installing", message: "Restart is taking longer than expected. Quit and reopen OpenMausBot to finish the update." });
+      setState({ status: "installing", message: "Restart is taking longer than expected. Quit and reopen OpenBot to finish the update." });
     }, 2 * 60 * 1000);
     operation.timer.unref?.();
   }

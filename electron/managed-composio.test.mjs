@@ -21,7 +21,7 @@ describe("managed Composio desktop registration", () => {
   });
 
   it("uses the default service only in a shipped build (the packaged app, a Cloud home's image); an explicit URL wins", () => {
-    expect(DEFAULT_MANAGED_COMPOSIO_BROKER_URL).toMatch(/^https:\/\//);
+    expect(DEFAULT_MANAGED_COMPOSIO_BROKER_URL).toBe("");
     expect(managedComposioBrokerUrl(undefined, true)).toBe(DEFAULT_MANAGED_COMPOSIO_BROKER_URL);
     expect(managedComposioBrokerUrl("  ", true)).toBe(DEFAULT_MANAGED_COMPOSIO_BROKER_URL);
     expect(managedComposioBrokerUrl(undefined, false)).toBe("");

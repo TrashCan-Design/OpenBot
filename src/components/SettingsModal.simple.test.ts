@@ -210,7 +210,7 @@ describe("Settings in Simple mode", () => {
     vi.stubGlobal("window", { ogb: { ...desktop.ogb, updater: { check: vi.fn(), install: vi.fn(), onState: vi.fn() } } });
     fixture.updater = { status: "idle" };
     const html = open("updates");
-    expect(html).toMatch(/>MausBot [^<]+<\/div>/);
+    expect(html).toMatch(/>OpenBot [^<]+<\/div>/);
     for (const shown of ["Check for updates", "MARKER:updatesConsent;", "Replay welcome tour", "Diagnostics"]) expect(placement(html, shown), shown).toBe("shown");
   });
 
@@ -219,7 +219,7 @@ describe("Settings in Simple mode", () => {
     const onSelect = vi.fn();
     fixture.serverUpdate = { phase: "up-to-date", pending: false, label: "Up to date", item: { key: "update", label: "Up to date", subtitle: "v1.2.3", icon: null, disabled: false, onSelect } };
     const html = open("updates");
-    expect(html).toMatch(/>MausBot [^<]+<\/div>/);
+    expect(html).toMatch(/>OpenBot [^<]+<\/div>/);
     expect(html).toContain("Up to date v1.2.3");
     expect(placement(html, "Check for updates")).toBe("shown");
   });
@@ -233,13 +233,14 @@ describe("Settings in Simple mode", () => {
     expect(SIMPLE_FOLDED).toEqual({ connections: "ai-keys", remote: "computer-elsewhere", desktopWorkspaces: "computer-elsewhere" });
   });
 
-  it("shows the AI page as Your AI, then API keys and connections", () => {
+  it("shows the AI page as Your AI, then API keys", () => {
     fixture.section = "engines";
     const html = render();
     expect(currentPage(html)).toBe("ai");
     expect(blocks(html)).toEqual(["engines", "connections"]);
     expect(markers(html).filter((name) => name === "engines" || name === "decisionModel")).toEqual(["engines"]);
-    expect(html).toMatch(/aria-expanded="false"[^>]*>[\s\S]*?API keys and connections/);
+    expect(html).toMatch(/aria-expanded="false"[^>]*>[\s\S]*?>API keys</);
+    expect(html).not.toContain("API keys and connections");
   });
 
   it("orders Computer as your bots' computers, your devices, the browser, logins, then Connect from elsewhere", () => {
@@ -251,14 +252,12 @@ describe("Settings in Simple mode", () => {
     expect(html).toContain('aria-label="Enable the built-in browser"');
   });
 
-  it("leads Usage & billing with one usage block, folds the limits, then shows the plan", () => {
-    fixture.section = "cloudAccount";
+  it("shows local model usage without a hosted plan", () => {
+    fixture.section = "usage";
     const html = render();
     expect(currentPage(html)).toBe("billing");
-    expect(blocks(html)).toEqual(["usage", "cloudAccount"]);
-    expect(html.indexOf("See all limits")).toBeLessThan(html.indexOf("MARKER:cloudAccount;"));
-    expect(placement(html, "MARKER:usage;")).toBe("folded");
-    expect(groupLabels(html)).toContain("Plan");
+    expect(blocks(html)).toEqual(["usage"]);
+    expect(html).not.toContain("MARKER:cloudAccount;");
   });
 
   it("shows a hosted workspace's admins People in Account and Activity as its own group", () => {
@@ -302,7 +301,6 @@ describe("Settings in Simple mode", () => {
     ["computer", "computer"],
     ["logins", "computer"],
     ["usage", "billing"],
-    ["cloudAccount", "billing"],
     ["updates", "updates"],
   ])("lands a deep link to %s on %s", (section, page) => {
     fixture.section = section;

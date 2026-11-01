@@ -1,4 +1,4 @@
-// Sending one @devs report to the MausBot team's endpoint and reading its answer: 201 {id}; 400 or 413 {error}; 429
+// Sending one @devs report to the OpenBot team's endpoint and reading its answer: 201 {id}; 400 or 413 {error}; 429
 // {error, retryAfter} (seconds, also Retry-After). And asking that endpoint's origin what became of the reports this app
 // sent (POST /api/bug-reports/status): the same way on the desktop and on a Cloud, which also signs its question with the
 // bootstrap secret it shares with the Admin, so the Admin can tell whether its plan still runs.
@@ -8,8 +8,8 @@ import { z } from "zod";
 import { DEVS_REPORT_LIMITS, withoutContact, type DevsReportPayload } from "./devs-report.ts";
 
 export const BUG_REPORT_PATH = "/api/bug-reports";
-export const PRODUCTION_CLOUD_ORIGIN = "https://cloud.openmausbot.com";
-export const STAGING_CLOUD_ORIGIN = "https://omb-cloud-staging.fly.dev";
+export const PRODUCTION_CLOUD_ORIGIN = "";
+export const STAGING_CLOUD_ORIGIN = "";
 const SEND_TIMEOUT_MS = 20_000;
 const ANSWER_MAX_BYTES = 16 * 1024;
 
@@ -31,8 +31,9 @@ export function bugReportEndpoint(env: NodeJS.ProcessEnv, cloudOrigin?: string |
       if ((url.protocol === "https:" || loopback) && !url.username && !url.password) return url.href;
     } catch { /* not an address: the default below */ }
   }
-  const origin = cloudOrigin ?? (env.OMB_CLOUD_STAGING === "1" ? STAGING_CLOUD_ORIGIN : PRODUCTION_CLOUD_ORIGIN);
-  return `${origin.replace(/\/+$/, "")}${BUG_REPORT_PATH}`;
+  // The original hosted service is retired; only a deliberately configured endpoint can receive reports.
+  if (cloudOrigin) return "";
+  return env.OMB_CLOUD_STAGING === "1" ? STAGING_CLOUD_ORIGIN : PRODUCTION_CLOUD_ORIGIN;
 }
 
 async function boundedJson(response: Response): Promise<Record<string, unknown>> {
@@ -138,4 +139,4 @@ export async function askReportStatus(endpoint: string, question: ReportStatusQu
 }
 
 export const devsStatusAsker = (reportEndpoint: string, home: ReportStatusHome | null, fetcher: typeof fetch = fetch) =>
-  (question: ReportStatusQuestion) => askReportStatus(bugReportStatusEndpoint(reportEndpoint), question, home, fetcher);
+  (question: ReportStatusQuestion) => reportEndpoint ? askReportStatus(bugReportStatusEndpoint(reportEndpoint), question, home, fetcher) : Promise.resolve(null);

@@ -10,8 +10,24 @@ export interface EngineInstall {
   managed?: { label: string; downloadBytes: number };
   server?: { package?: string; standalone?: { version: string; downloadBytes: number } };
   settings?: "connections";
-  /** The CLI runs the copy OpenMausBot installed, which the person's terminal does not reach: set up in the app, not there. */
+  /** The CLI runs the copy OpenBot installed, which the person's terminal does not reach: set up in the app, not there. */
   appCopy?: boolean;
+}
+
+type Platform = NonNullable<EngineInstall["platform"]>;
+
+function hostPlatform(): Platform {
+  const platform = window.ogb?.platform;
+  if (platform === "darwin" || platform === "win32" || platform === "linux") return platform;
+  const userAgent = navigator.userAgent;
+  if (userAgent.includes("Mac")) return "darwin";
+  if (userAgent.includes("Win")) return "win32";
+  return "linux";
+}
+
+/** The command that installs this engine where the server runs, falling back to this computer's platform. */
+export function installCommandFor(install: EngineInstall | undefined): string | null {
+  return install?.command?.[install.platform ?? hostPlatform()] ?? null;
 }
 
 // Engines an install switched to the app's own copy because the copy their CLI found doesn't start. The line saying so
