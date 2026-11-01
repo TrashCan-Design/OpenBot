@@ -3,7 +3,6 @@ import test from "node:test";
 
 import { readFileSync } from "node:fs";
 import { appPermissionAllowed, appPermissionHandlers, emailDraftUrl, externalLinkUrl, externalWebUrl, remoteClipboardWriteAllowed } from "./app-permissions.mjs";
-import { boatClaimMailto } from "../src/lib/boat-offer.ts";
 import { cloudPlanSnapshot, createCloudAccountClient } from "./cloud-account.mjs";
 import { myCloudOrigin, rememberedCloudHome } from "./cloud-home.mjs";
 
@@ -94,10 +93,6 @@ test("an email link opens only as a draft to one address with a subject and a bo
     assert.throws(() => externalLinkUrl(url), /Only web/, url);
   for (const url of [null, 123, "not a url"])
     assert.throws(() => externalLinkUrl(url), /web address/);
-});
-
-test("the app's claim to Boat opens exactly as the app drafts it", () => {
-  assert.equal(externalLinkUrl(boatClaimMailto()), boatClaimMailto());
 });
 
 test("both external-link entry points use the policy and IPC retains the local-origin gate", () => {
@@ -256,7 +251,7 @@ test("this computer's own page keeps its permissions through the same handlers",
   assert.equal(check("clipboard-read", "https://other.example", { isMainFrame: true }, local), false);
 });
 
-test("the app installs these handlers, with its one rule for My Cloud and a wait for the saved sign-in", () => {
+test("the app installs permission handlers for the active desktop window", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(main, /setPermissionRequestHandler\(appPermissions\.request\)/);
   assert.match(main, /setPermissionCheckHandler\(appPermissions\.check\)/);
@@ -264,14 +259,8 @@ test("the app installs these handlers, with its one rule for My Cloud and a wait
   assert.match(main, /^let appPermissions = null;$/m);
   assert.match(main, /^  appPermissions = appPermissionHandlers\(\{$/m);
   assert.doesNotMatch(main, /(const|let|var) appPermissions = appPermissionHandlers/);
-  assert.match(main, /cloudHomeOrigin: myCloud,\n/);
-  assert.match(main, /homeOrigin: \(\) => homeWindow\.placeOrigin\(\),\n/, "notifications on the page the window shows: My Cloud's, or a team's Cloud's");
-  assert.match(main, /cloudHomeRestoring: \(\) => cloudAccountRestoring \? cloudAccountRestored\(\) : null,\n/);
-  assert.equal(main.match(/myCloudOrigin\(/g)?.length, 1);
-  assert.match(main, /cloudPageSenderAllowed\(event, \{ contents, homeOrigin: myCloud\(\),/);
-  assert.doesNotMatch(main, /rememberedHome\??\.accountId/);
-  assert.doesNotMatch(main, /remembered: true/);
-  assert.match(main, /cloudAccountRestoring = true;\n\s+cloudAccountStarted = ensureCloudAccount\(\)\.start\(\)\.catch\(\(\) => \{\}\)\.finally\(\(\) => \{ cloudAccountRestoring = false; \}\);/);
+  assert.match(main, /homeOrigin: \(\) => homeWindow\.placeOrigin\(\),\n/);
+  assert.doesNotMatch(main, /cloudAccountStarted = ensureCloudAccount\(\)\.start\(\)/);
 });
 
 const ADMIN = "http://127.0.0.1:9";
@@ -524,4 +513,26 @@ test("the base policy itself still grants a remote origin nothing", () => {
   for (const permission of ["clipboard-sanitized-write", "clipboard-read", "notifications", "fullscreen"]) {
     assert.equal(appPermissionAllowed(permission, REMOTE, LOCAL_ORIGIN, { isMainFrame: true }), false, permission);
   }
+});
+
+test("the active remote server's page may show notifications, in the main window's main frame only", () => {
+  const state = { remote: REMOTE, main: { getURL: () => `${REMOTE}/chat` } };
+  const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => state.main, cloudHomeOrigin: () => null,
+    activeRemoteOrigin: () => state.remote });
+  const onRemote = (extra = {}) => ({ requestingUrl: `${REMOTE}/settings`, isMainFrame: true, ...extra });
+  const ask = (details, contents = state.main, permission = "notifications") => {
+    let granted; handlers.request(contents, permission, (value) => { granted = value; }, details); return granted;
+  };
+  assert.equal(ask(onRemote()), true);
+  assert.equal(handlers.check(state.main, "notifications", REMOTE, { isMainFrame: true }), true);
+  assert.equal(ask(onRemote({ isMainFrame: false })), false, "a frame inside it");
+  assert.equal(handlers.check(state.main, "notifications", REMOTE, {}), false, "a frame it cannot vouch for");
+  assert.equal(ask(onRemote(), { getURL: () => `${REMOTE}/` }), false, "another window");
+  assert.equal(ask(onRemote({ requestingUrl: "https://other.tail1.ts.net:9444/" })), false, "another server");
+  for (const permission of ["geolocation", "camera", "clipboard-read", "fullscreen"]) {
+    assert.equal(ask(onRemote(), state.main, permission), false, permission);
+  }
+  state.remote = null;
+  assert.equal(ask(onRemote()), false, "no active remote: at once");
+  for (const requesting of ["about:blank", "data:text/html,x", ""]) assert.equal(ask(onRemote({ requestingUrl: requesting })), false, `${requesting || "(empty)"}`);
 });

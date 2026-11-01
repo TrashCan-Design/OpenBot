@@ -1,12 +1,12 @@
 {
-  "name": "openmausbot",
+  "name": "openbot",
   "private": true,
-  "version": "0.1.135",
+  "version": "0.1.136",
   "description": "A local-first chat app for running a team of AI agents.",
-  "homepage": "https://github.com/milind-soni/OpenMausBot",
+  "homepage": "https://github.com/TrashCan-Design/OpenBot",
   "repository": {
     "type": "git",
-    "url": "https://github.com/milind-soni/OpenMausBot.git"
+    "url": "https://github.com/TrashCan-Design/OpenBot.git"
   },
   "author": {
     "name": "Milind Soni",

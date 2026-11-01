@@ -408,7 +408,7 @@ export function CloudComputersCard({
                 : t("vm.cloud.foundMany", { count: instances.length })}
       </p>
 
-      <div
+      {!(configured === false && !loading && !unavailableReason) && <div
         aria-busy={loading || pending !== null}
         className="mt-3 overflow-hidden rounded-xl border border-hairline/40"
       >
@@ -492,7 +492,7 @@ export function CloudComputersCard({
             </div>
           );
         })}
-      </div>
+      </div>}
     </Card>
   );
 }
@@ -1207,7 +1207,7 @@ export function LocalComputerSection() {
   return (
     <>
       <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</p>
-      <CloudComputersCard
+      {Boolean(window.ogb?.cloudAccount) && <CloudComputersCard
         instances={cloudInventory}
         configured={cloudConfigured}
         loading={cloudLoading}
@@ -1217,8 +1217,7 @@ export function LocalComputerSection() {
         onRefresh={() => setCloudRefreshKey((key) => key + 1)}
         onSleep={(instance) => void actOnCloudComputer("sleep", instance)}
         onDelete={(instance) => void actOnCloudComputer("delete", instance)}
-      />
-
+      />}
       <VpsComputersCard
         instances={vpsInventory}
         configured={vpsConfigured}

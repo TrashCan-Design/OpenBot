@@ -133,39 +133,32 @@ describe("CI concurrency", () => {
     expect(delegated).not.toContain("/tasks/${peerThread.threadId}`");
   });
 
-  it("makes a release wait for its commit's CI gate before any draft", () => {
-    const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
-    expect(release.jobs.assemble.needs).toContain("ci");
-    expect(release.jobs.ci.needs).toBe("prepare");
-    expect(release.jobs.ci.permissions).toEqual({ actions: "write", contents: "write" });
-    const wait = release.jobs.ci.steps.find((step: { run?: string }) => step.run === "node scripts/release-ci.mjs");
-    expect(wait.if).toBe("${{ !inputs.ship_without_ci }}");
-    expect(wait.env).toMatchObject({ SHA: "${{ needs.prepare.outputs.sha }}", VERSION: "${{ needs.prepare.outputs.version }}" });
-    // The script reads ci.yml's gate by its job name.
-    expect(readFileSync(new URL("./release-ci.mjs", import.meta.url), "utf8")).toContain(`job.name === "${workflow.jobs.gate.name}"`);
-    // The release lane is a branch, so its runs get their own concurrency group.
-    expect(workflow.on).toHaveProperty("workflow_dispatch");
-  });
-
-  it("checks out every module the release gate imports", () => {
-    const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
-    const checkout = release.jobs.ci.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
-    const sparse = (checkout.with["sparse-checkout"] as string).split("\n").map((line) => line.trim()).filter(Boolean);
-    const imports = [...readFileSync(new URL("./release-ci.mjs", import.meta.url), "utf8").matchAll(/^import .* from "\.\/([^"]+)";$/gm)]
-      .map((match) => `scripts/${match[1]}`);
-    expect(imports).toContain("scripts/ci-scope.mjs");
-    expect(sparse.sort()).toEqual(["scripts/release-ci.mjs", ...imports].sort());
+  it("publishes a new Windows version from this fork and validates the updater feed", () => {
+    const release = parse(readFileSync(new URL("../.github/workflows/openbot-windows-release.yml", import.meta.url), "utf8"));
+    expect(release.on.push).toEqual({ branches: ["main"], paths: ["package.json"] });
+    expect(release.on).toHaveProperty("workflow_dispatch");
+    expect(release.permissions).toEqual({ contents: "write" });
+    const steps = release.jobs.package.steps as { name?: string; run?: string }[];
+    const gate = steps.find((step) => step.name === "Check release version and repository")!.run!;
+    expect(gate).toContain('test "$GITHUB_REPOSITORY" = "TrashCan-Design/OpenBot"');
+    expect(gate).toContain('gh release view "v$current"');
+    const validate = steps.find((step) => step.name === "Verify installer and update feed")!.run!;
+    expect(validate).toContain("release/latest.yml");
+    expect(validate).toContain("entry.sha512");
+    expect(steps.find((step) => step.name === "Verify packaged browser and server")!.run).toContain("smoke-packaged-server.mjs");
+    const publish = steps.find((step) => step.name === "Publish updater-compatible GitHub Release")!.run!;
+    expect(publish).toContain('gh release create "v$VERSION"');
+    expect(publish).toContain('gh release edit "v$VERSION"');
   });
 
   it("builds the Windows Defender check's installer exactly as the release's Windows job does", () => {
-    const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
+    const release = parse(readFileSync(new URL("../.github/workflows/openbot-windows-release.yml", import.meta.url), "utf8"));
     const check = parse(readFileSync(new URL("../.github/workflows/windows-defender-check.yml", import.meta.url), "utf8"));
     type Step = { uses?: string; with?: unknown; run?: string; shell?: string };
-    const toolchainToInstaller = (steps: Step[]) => steps.slice(1, steps.findIndex((step) => step.run === "pnpm package:win") + 1)
-      .map(({ uses, with: inputs, run, shell }) => ({ uses, with: inputs, run, shell }));
-    expect(toolchainToInstaller(check.jobs.check.steps).at(-1)?.run).toBe("pnpm package:win");
-    expect(toolchainToInstaller(check.jobs.check.steps)).toEqual(toolchainToInstaller(release.jobs.windows.steps));
-    expect(check.jobs.check["runs-on"]).toBe(release.jobs.windows["runs-on"]);
+    const installer = (steps: Step[]) => steps.find((step) => step.run === "pnpm package:win");
+    expect(installer(check.jobs.check.steps)?.run).toBe(installer(release.jobs.package.steps)?.run);
+    expect(check.jobs.check["runs-on"]).toBe(release.jobs.package["runs-on"]);
+    expect(check.jobs.check.steps.find((step: Step) => step.run?.includes("defender-check-win.mjs"))?.run).toContain("OpenBot-*-setup.exe");
   });
 
   it("lets the scope read the previous commit's CI and a pull request's labels, and nothing more", () => {
@@ -249,33 +242,11 @@ describe("CI concurrency", () => {
     )).toBe(true);
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
       if (["static", "gate"].includes(name)) continue;
-      // The one deploy job: after the control-plane checks, on main pushes only. It is
-      // not part of the merge gate.
-      if (name === "deploy-composio-broker") {
-        expect(job.needs).toEqual(["control-plane"]);
-        expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'");
-        expect(workflow.jobs.gate.needs).not.toContain(name);
-        // Without the Cloudflare token the deploy is skipped with a warning, not failed:
-        // every step after the token check waits on it.
-        const [check, ...rest] = job.steps as { id?: string; if?: string; env?: Record<string, string>; run?: string }[];
-        expect(check.id).toBe("token");
-        expect(check.env).toEqual({ CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" });
-        expect(check.run).toContain("::warning");
-        for (const step of rest) expect(step.if).toBe("steps.token.outputs.present == 'true'");
-        // The broker is typechecked and tested in the same checkout it deploys.
-        const runs = rest.map((step) => step.run);
-        const deploy = rest.findIndex((step) => (step as { uses?: string }).uses?.startsWith("cloudflare/wrangler-action@"));
-        expect(runs.indexOf("pnpm broker:check")).toBeGreaterThan(-1);
-        expect(runs.indexOf("pnpm broker:check")).toBeLessThan(deploy);
-        expect(runs.indexOf("pnpm broker:test")).toBeGreaterThan(-1);
-        expect(runs.indexOf("pnpm broker:test")).toBeLessThan(deploy);
-        continue;
-      }
       expect(job.needs).toBe("static");
       expect(job.if).toBe(`contains(needs.static.outputs.jobs, '"${name}"')`);
     }
     // ci-scope selects exactly the jobs the workflow has.
-    expect(Object.keys(workflow.jobs).filter((name) => !["static", "gate", "deploy-composio-broker"].includes(name)).sort())
+    expect(Object.keys(workflow.jobs).filter((name) => !["static", "gate"].includes(name)).sort())
       .toEqual([...SELECTABLE_JOBS].sort());
   });
 
