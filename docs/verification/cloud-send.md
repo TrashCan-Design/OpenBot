@@ -83,7 +83,7 @@ rest of the reasons a person reads: a pass that stops as a whole, logins this
 computer's server did not hand over, and a 1Password token 1Password already
 refused here.
 
-My Cloud's welcome (`src/components/cloud-welcome/CloudWelcome.test.ts`): while
+My Cloud's former welcome: while
 the move runs, or once it has gone, **Bring your stuff** is done by itself, so
 the welcome goes straight on to the AI with nothing to press; back on that step
 it says so in one line, with a fresh start only behind **More**. Before anything
