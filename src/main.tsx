@@ -4,7 +4,7 @@ import App from "./App";
 import {
   BROWSER_SIGN_IN_FAILED, previewBrowserSignIn, readSessionState, SERVICE_TRUST_REASON, takeBrowserSignInFromLocation, takePairingCodeFromLocation, takeInvitedEmailFromLocation,
 } from "./lib/session";
-import { bootstrapBrand } from "./lib/brand";
+import { bootstrapBrand, productName } from "./lib/brand";
 import { applySkinChoice, readSkinChoice } from "./lib/skins";
 import { applyChatWidth, readChatWidth } from "./lib/chat-width";
 import { applyFont, readFont } from "./lib/fonts";
@@ -50,6 +50,8 @@ async function chooseRoot(): Promise<React.ReactNode> {
   return <App />;
 }
 
+// The window is named before the brand file is asked for: the answer only ever renames it.
+document.title = productName();
 void Promise.all([bootstrapBrand(), chooseRoot()]).then(([, root]) => {
   createRoot(document.getElementById("root")!).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
 });

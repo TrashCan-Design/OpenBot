@@ -60,7 +60,7 @@ export function createMascotClock(env: ClockEnvironment): MascotClock {
     }
     timerHandle = env.setTimer(() => {
       timerHandle = null;
-      if (frameHandle === null && !hidden) frameHandle = env.requestFrame(run);
+      if (frameHandle === null && !hidden && entries.size) frameHandle = env.requestFrame(run);
     }, wait - FULL_FRAME_MS / 2);
   };
 

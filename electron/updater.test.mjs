@@ -16,10 +16,10 @@ const CLOUD = "https://home-7f3k2.fly.dev";
 const OTHER = "https://bots.example.test";
 const OWN = "https://omb-c-a.fly.dev";
 
-const fixture = vi.hoisted(() => ({ autoUpdater: null, handlers: new Map() }));
+const fixture = vi.hoisted(() => ({ autoUpdater: null, handlers: new Map(), userData: null }));
 
 vi.mock("electron", () => ({
-  app: { isPackaged: true, getPath: () => "/unused-updater-test-log", getVersion: () => "1.0.0", hide: vi.fn() },
+  app: { isPackaged: true, getPath: () => fixture.userData, getVersion: () => "1.0.0", hide: vi.fn() },
   clipboard: { writeText: vi.fn() },
   ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) },
 }));
@@ -121,11 +121,14 @@ const settle = async () => {
 
 beforeEach(() => {
   localOriginModule.setLocalOrigin(LOCAL);
+  fixture.userData = mkdtempSync(join(tmpdir(), "openbot-updater-test-"));
   vi.useFakeTimers();
 });
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  rmSync(fixture.userData, { recursive: true, force: true });
+  fixture.userData = null;
 });
 
 function bridgeFor(origin, { clicked = false, rule = null } = {}) {
@@ -151,68 +154,20 @@ function bridgeFor(origin, { clicked = false, rule = null } = {}) {
   return { bridge, invoked, asked };
 }
 
-it("My Cloud's page gets the update bridge, and it restarts the app only on the person's click", async () => {
-  const local = bridgeFor(LOCAL);
+it("only this app's local page gets the update bridge", async () => {
+  const rule = mainRule();
+  const local = bridgeFor(LOCAL, { rule });
   expect(Object.keys(local.bridge.updater).sort()).toEqual(["check", "install", "onState", "seen"]);
-  expect(local.asked, "this computer's page has the whole bridge without asking").toEqual([]);
+  expect(local.asked).toEqual([]);
   await local.bridge.updater.install();
   expect(local.invoked).toEqual([["update:install"]]);
 
-  const rule = mainRule();
-  rule.show(page(CLOUD), "cloud");
-  const cloud = bridgeFor(CLOUD, { rule });
-  expect(Object.keys(cloud.bridge.updater).sort()).toEqual(["check", "install", "onState", "seen"]);
-  await expect(cloud.bridge.updater.install()).rejects.toThrow(/Restart to update/);
-  await cloud.bridge.updater.check();
-  cloud.bridge.updater.onState(() => {});
-  expect(cloud.invoked).toEqual([["update:check"], ["update:get-state"]]);
-  const clicked = bridgeFor(CLOUD, { clicked: true, rule });
-  await clicked.bridge.updater.install();
-  expect(clicked.invoked).toEqual([["update:install"]]);
-});
-
-it("another server's page never gets the update bridge; My Cloud's does, even while the sign-in restores", () => {
-  const rule = mainRule();
-  const has = (origin, activeId) => {
-    rule.show(page(origin), activeId);
-    return "updater" in bridgeFor(origin, { rule }).bridge;
-  };
-  expect(has(OTHER, "vps")).toBe(false);
-  expect(has(CLOUD, "cloud")).toBe(true);
-  rule.show(page(CLOUD), "cloud");
-  expect(rule.offered({ sender: rule.window.webContents, senderFrame: { url: `${CLOUD}/` } })).toBe(false);
-
-  rule.launching();
-  expect(has(CLOUD, "cloud")).toBe(true);
-  expect(has(OTHER, "vps")).toBe(false);
-
-  rule.signedIn({ status: "signed-out" });
-  expect(has(CLOUD, "cloud")).toBe(false);
-
-  rule.signedIn({ status: "connected", account: { id: "a1" }, machine: { origin: CLOUD, status: "ready" } });
-  expect(has(CLOUD, "cloud")).toBe(true);
+  for (const [origin, place] of [[CLOUD, "cloud"], [OTHER, "vps"], [OWN, "own"]]) {
+    rule.show(page(origin), place);
+    expect("updater" in bridgeFor(origin, { rule }).bridge).toBe(false);
+  }
   rule.context.desktopRemoteAccess = { endpoint: "https://companion.example.test" };
-  expect(has(CLOUD, "cloud")).toBe(false);
-  rule.context.cloudSignInRestored = false;
-  expect(has(CLOUD, "cloud")).toBe(false);
-
-  expect("updater" in bridgeFor(CLOUD).bridge).toBe(false);
-});
-
-it("another Cloud of the person's own gets the update bridge as My Cloud's page does; a server only signed in with their account does not", () => {
-  const rule = mainRule();
-  const has = (origin, activeId) => {
-    rule.show(page(origin), activeId);
-    return "updater" in bridgeFor(origin, { rule }).bridge;
-  };
-  rule.show(page(CLOUD), "cloud");
-  rule.launching();
-  const cloud = (over) => ({ id: "c-a", name: "Client A", color: null, role: "owner", tier: "pro", runsOn: "cloud", status: "ready", origin: OWN, teamId: null, primary: false, managed: true, ...over });
-  rule.signedIn({ status: "connected", account: { id: "a1" }, machine: { origin: CLOUD, status: "ready" }, clouds: [cloud({ id: "c-home", origin: CLOUD, primary: true }), cloud()] });
-  expect(has(OWN, "own")).toBe(true);
-  expect(has(OTHER, "vps")).toBe(false);
-  rule.signedIn({ status: "connected", account: { id: "a1" }, machine: { origin: CLOUD, status: "ready" }, clouds: [cloud({ id: "c-home", origin: CLOUD, primary: true }), cloud({ runsOn: "server", managed: false })] });
-  expect(has(OWN, "own")).toBe(false);
+  expect("updater" in bridgeFor(CLOUD, { rule }).bridge).toBe(false);
 });
 
 it("a downloaded update installs when the app quits, except a system package, which is the person's to install", async () => {
@@ -287,34 +242,23 @@ it("a downloaded update installs by itself at a quiet moment on macOS and Window
   }
 });
 
-it("My Cloud's page hears \"Restart to update\" once the sign-in it loaded before is restored", async () => {
+it("a local page hears the staged update while remote pages cannot read it", async () => {
   const rule = mainRule();
-  rule.launching();
   const { updater, autoUpdater, handlers } = await load(rule.pageAllowed);
-  rule.context.sendUpdaterState = updater.sendUpdaterState;
-  const cloud = page(CLOUD);
-  rule.show(cloud, "cloud");
+  const remote = page(CLOUD);
+  rule.show(remote, "cloud");
   updater.attachUpdaterWindow(rule.window);
   updater.startUpdater();
-
   await vi.advanceTimersByTimeAsync(15_000);
   await settle();
   expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
-  expect(() => handlers.get("update:get-state")(cloud.event)).toThrow(/only available/);
-  expect(cloud.webContents.send).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-  // The staged 2.0.0 is still offered, so the hourly check looks again (quietly) for something newer; macOS stages
-  // natively and is not re-checked.
-  expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(process.platform === "darwin" ? 1 : 2);
-  expect(cloud.webContents.send).not.toHaveBeenCalled();
+  expect(() => handlers.get("update:get-state")(remote.event)).toThrow(/only available/);
+  expect(remote.webContents.send).not.toHaveBeenCalled();
 
-  rule.signedIn({ status: "connected", account: { id: "a1" }, machine: { origin: CLOUD, status: "ready" } });
-  expect(cloud.webContents.send).toHaveBeenLastCalledWith("update:state", expect.objectContaining({ status: "downloaded", version: "2.0.0" }));
-
-  const other = page(OTHER);
-  rule.show(other, "vps");
-  rule.signedIn({ status: "connected", account: { id: "a1" }, machine: { origin: CLOUD, status: "ready" } });
-  expect(other.webContents.send).not.toHaveBeenCalled();
+  const local = page(LOCAL);
+  rule.show(local);
+  updater.attachUpdaterWindow(rule.window);
+  expect(handlers.get("update:get-state")(local.event)).toMatchObject({ status: "downloaded", version: "2.0.0" });
 });
 
 it("downloads an update by itself: the first check after launch starts it, and nothing restarts", async () => {
@@ -336,35 +280,20 @@ it("downloads an update by itself: the first check after launch starts it, and n
   expect(statuses.at(-1)).toBe("downloaded");
 });
 
-it("My Cloud's page reads and drives the update channels, and another server's page is refused", async () => {
+it("only the local app page reads and drives update channels", async () => {
   const rule = mainRule();
   const { handlers } = await load(rule.pageAllowed);
   expect([...handlers.keys()].sort()).toEqual(["update:check", "update:get-state", "update:install", "update:seen"]);
 
-  const cloud = page(CLOUD);
-  rule.show(cloud, "cloud");
-  for (const channel of handlers.keys()) expect(() => handlers.get(channel)(cloud.event), channel).not.toThrow();
-  rule.context.cloudAccount = { homeTarget: () => null, state: () => ({ status: "unavailable", account: { id: "a1" } }), isOwnCloud: () => false };
-  rule.context.rememberedHome = { accountId: "a1", origin: CLOUD };
-  expect(() => handlers.get("update:get-state")(cloud.event)).not.toThrow();
-  rule.context.rememberedHome = { accountId: "someone-else", origin: CLOUD };
-  expect(() => handlers.get("update:get-state")(cloud.event)).toThrow(/only available/);
-  rule.context.cloudAccount = { homeTarget: () => ({ origin: CLOUD }), state: () => ({ status: "connected", account: { id: "a1" } }), isOwnCloud: () => false };
-
-  rule.context.desktopRemoteAccess = { endpoint: "https://companion.example.test" };
-  for (const channel of handlers.keys()) expect(() => handlers.get(channel)(cloud.event), channel).toThrow(/only available/);
-  rule.context.desktopRemoteAccess = false;
-
-  const other = page(OTHER);
-  rule.show(other, "vps");
-  for (const channel of handlers.keys()) expect(() => handlers.get(channel)(other.event), channel).toThrow(/only available/);
-  expect(() => handlers.get("update:get-state")({ sender: other.webContents, senderFrame: { url: `${CLOUD}/` } })).toThrow(/only available/);
-  rule.show(cloud, "cloud");
-  expect(() => handlers.get("update:get-state")({ sender: cloud.webContents, senderFrame: { url: `${CLOUD}/` } })).toThrow(/only available/);
-
+  for (const [origin, place] of [[CLOUD, "cloud"], [OTHER, "vps"], [OWN, "own"]]) {
+    const remote = page(origin);
+    rule.show(remote, place);
+    for (const channel of handlers.keys()) expect(() => handlers.get(channel)(remote.event), channel).toThrow(/only available/);
+  }
   const local = page(LOCAL);
   rule.show(local);
   for (const channel of handlers.keys()) expect(() => handlers.get(channel)(local.event), channel).not.toThrow();
+  expect(() => handlers.get("update:get-state")({ sender: local.webContents, senderFrame: { url: `${CLOUD}/` } })).toThrow(/only available/);
 });
 
 it("sends update news only to a page allowed to read it", async () => {
@@ -387,12 +316,16 @@ it("sends update news only to a page allowed to read it", async () => {
   expect(other.webContents.send).not.toHaveBeenCalled();
   expect(() => handlers.get("update:get-state")(other.event)).toThrow(/only available/);
 
-  const cloud = page(CLOUD);
-  rule.show(cloud, "cloud");
-  expect(handlers.get("update:get-state")(cloud.event)).toMatchObject({ status: "downloading", version: "2.0.0" });
+  const remote = page(CLOUD);
+  rule.show(remote, "cloud");
+  expect(() => handlers.get("update:get-state")(remote.event)).toThrow(/only available/);
+  const local = page(LOCAL);
+  rule.show(local);
+  expect(handlers.get("update:get-state")(local.event)).toMatchObject({ status: "downloading", version: "2.0.0" });
   finish();
   await settle();
-  expect(cloud.webContents.send).toHaveBeenLastCalledWith("update:state", expect.objectContaining({ status: "downloaded", version: "2.0.0" }));
+  expect(local.webContents.send).toHaveBeenLastCalledWith("update:state", expect.objectContaining({ status: "downloaded", version: "2.0.0" }));
+  expect(remote.webContents.send).not.toHaveBeenCalled();
   expect(other.webContents.send).not.toHaveBeenCalled();
 });
 
