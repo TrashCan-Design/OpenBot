@@ -16,14 +16,17 @@ if (!runnerTemp || !path.isAbsolute(runnerTemp) || !fs.existsSync(runnerTemp)) {
 const candidate = path.resolve(process.argv[2] ?? "");
 if (!candidate.endsWith(".deb") || !fs.existsSync(candidate)) fail("pass the newly built DEB path");
 
-try {
-  const status = execFileSync("dpkg-query", ["-W", "-f=${db:Status-Abbrev}", "openmausbot"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
-  if (status.startsWith("ii")) fail("refusing to replace a pre-existing OpenBot installation");
-} catch (error) {
-  if (String(error?.message ?? error).includes("refusing to replace")) throw error;
+for (const packageName of ["openbot", "openmausbot"]) {
+  let status = "";
+  try {
+    status = execFileSync("dpkg-query", ["-W", "-f=${db:Status-Abbrev}", packageName], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    // A missing package is expected on the ephemeral runner.
+  }
+  if (status.startsWith("ii")) fail(`refusing to replace a pre-existing ${packageName} installation`);
 }
 
 const temporary = fs.mkdtempSync(path.join(path.resolve(runnerTemp), "omb-deb-upgrade-"));
@@ -100,7 +103,7 @@ try {
   ) {
     fail(`upgraded Chromium sandbox is not root:root 4755: ${chromiumSandbox}`);
   }
-  const installedVersion = execFileSync("dpkg-query", ["-W", "-f=${Version}", "openmausbot"], {
+  const installedVersion = execFileSync("dpkg-query", ["-W", "-f=${Version}", "openbot"], {
     encoding: "utf8",
   }).trim();
   console.log(

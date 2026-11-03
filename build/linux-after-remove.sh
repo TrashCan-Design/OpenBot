@@ -27,13 +27,13 @@ else
   TEST_MODE=0
 fi
 
-# Preserve electron-builder's cleanup of the exact legacy launcher. Never
+# Preserve electron-builder's cleanup of the exact package launcher. Never
 # remove an unrelated file that now happens to use the same command name.
 if [ "$TEST_MODE" -eq 0 ]; then
   if command -v update-alternatives >/dev/null 2>&1; then
-    update-alternatives --remove openmausbot /opt/OpenMausBot/openmausbot
-  elif [ -L /usr/bin/openmausbot ] && [ "$(readlink /usr/bin/openmausbot)" = /opt/OpenMausBot/openmausbot ]; then
-    rm -- /usr/bin/openmausbot
+    update-alternatives --remove openbot /opt/OpenBot/openbot
+  elif [ -L /usr/bin/openbot ] && [ "$(readlink /usr/bin/openbot)" = /opt/OpenBot/openbot ]; then
+    rm -- /usr/bin/openbot
   fi
 fi
 
