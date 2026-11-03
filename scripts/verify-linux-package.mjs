@@ -396,7 +396,7 @@ function verifyCloudflaredResources(resources, label, { directoryMode = 0o755 } 
 const appImage = exactlyOne(".AppImage");
 const deb = exactlyOne(".deb");
 const unpacked = path.join(releaseDir, "linux-unpacked");
-const executable = path.join(unpacked, "openmausbot");
+const executable = path.join(unpacked, "openbot");
 const resources = path.join(unpacked, "resources");
 
 requireExecutable(appImage);
@@ -420,9 +420,9 @@ const fields = execFileSync(
   { encoding: "utf8" },
 );
 for (const expected of [
-  "Package: openmausbot",
+  "Package: openbot",
   "Architecture: amd64",
-  "Maintainer: Milind Soni",
+  "Maintainer: TrashCan-Design <71270458+TrashCan-Design@users.noreply.github.com>",
   "Section: utils",
   "Priority: optional",
 ]) {
@@ -462,15 +462,15 @@ try {
     "hicolor",
     "scalable",
     "apps",
-    "openmausbot.svg",
+    "openbot.svg",
   );
   requireFile(desktopFile);
   requireFile(scalableIcon);
   const desktop = readFileSync(desktopFile, "utf8");
   for (const expected of [
     "Name=OpenBot",
-    "Exec=/opt/OpenBot/openmausbot %U",
-    "Icon=openmausbot",
+    "Exec=/opt/OpenBot/openbot %U",
+    "Icon=openbot",
     "StartupWMClass=com.openmausbot.app",
     "Categories=Utility;",
   ]) {
