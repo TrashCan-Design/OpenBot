@@ -19,6 +19,7 @@ import { listenLiveFrames } from "@/lib/live-events";
 import { CloudScreenPreview } from "./CloudScreenPreview";
 import { isActiveTurnRefusal, isRemoteScreenshotContention } from "@/lib/remote-desktop";
 import { CloudBackendPicker } from "./CloudBackendPicker";
+import { SharedVpsModePicker, SharedVpsStatusLine } from "./SharedVpsDesktopControls";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { routineRunLabel, routineRunTone } from "@/lib/routine-display";
@@ -614,16 +615,6 @@ export function ComputerPanel({
     livePlace,
     threadPath,
   ]);
-
-  useEffect(() => {
-    if (panelView !== "computer" || cloudBackend !== "vps" || bot.vpsDesktopMode !== "shared" || !computerStatusCurrent) return;
-    let alive = true;
-    const refresh = () => void api(threadPath("computer"), { background: true })
-      .then((status: VpsComputerStatus) => { if (alive) setVpsStatus(status); })
-      .catch(() => {});
-    const interval = window.setInterval(refresh, 2_000);
-    return () => { alive = false; window.clearInterval(interval); };
-  }, [panelView, cloudBackend, bot.vpsDesktopMode, computerStatusCurrent, threadPath]);
 
   useEffect(() => {
     if (phase !== "busy-boat") return;
@@ -1325,16 +1316,7 @@ export function ComputerPanel({
             )}
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && !liveHere && <span className="text-[11px]">{t("computer.badge.vps")}</span>}
         </div>
-        {cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent && (
-          <div className="mb-2 rounded-lg bg-card px-3 py-2 text-[12px] text-ink-secondary" aria-live="polite">
-            <span className="font-medium text-ink">Shared VPS Desktop</span>
-            <span className="ml-2">{!vpsStatus?.ready ? "Offline" : vpsStatus.sharedDesktop?.controller === "person" ? "You have control"
-              : vpsStatus.sharedDesktop?.activeBot ? `${vpsStatus.sharedDesktop.activeBot.name} is using it` : "Ready"}</span>
-            {!!vpsStatus?.sharedDesktop?.waitingQueue?.length && (
-              <div className="mt-1">Waiting: {vpsStatus.sharedDesktop.waitingQueue.map(entry => entry.name).join(", ")}</div>
-            )}
-          </div>
-        )}
+        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} />
         <div className={cn("relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card", liveHere && "ring-2 ring-accent")}>
           {liveHere && liveTarget ? (
             <Suspense fallback={<Loader2 size={18} className="animate-spin text-ink-secondary" />}>
@@ -1742,21 +1724,7 @@ export function ComputerPanel({
                 value={cloudBackend}
                 onChange={(backend) => updateComputerSelection({ cloudBackend: backend })}
               />
-              {cloudBackend === "vps" && (
-                <div role="group" aria-label="VPS desktop mode" className="mt-3 flex flex-wrap gap-2 text-[12px]">
-                  {(["per-bot", "shared"] as const).map(mode => (
-                    <button key={mode} type="button" aria-pressed={(profileBot.vpsDesktopMode ?? "per-bot") === mode}
-                      disabled={profileBot.busy || pending !== null}
-                      onClick={() => updateComputerSelection({ vpsDesktopMode: mode })}
-                      className={cn("rounded-lg px-3 py-2 disabled:opacity-50", (profileBot.vpsDesktopMode ?? "per-bot") === mode ? "bg-accent text-white" : "bg-control text-ink hover:bg-raised-hover")}>
-                      {mode === "shared" ? "Shared VPS Desktop" : "Per-Bot VPS"}
-                    </button>
-                  ))}
-                  {profileBot.vpsDesktopMode === "shared" && (
-                    <span className="w-full text-ink-secondary">Uses the default VPS SSH alias. All shared bots use this desktop and its files.</span>
-                  )}
-                </div>
-              )}
+              {cloudBackend === "vps" && <SharedVpsModePicker mode={profileBot.vpsDesktopMode ?? "per-bot"} disabled={profileBot.busy || pending !== null} onChange={(mode) => updateComputerSelection({ vpsDesktopMode: mode })} />}
             </>
           )}
         </div>

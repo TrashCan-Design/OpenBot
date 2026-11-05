@@ -90,6 +90,29 @@ export class SharedVpsSeat {
     }
   }
 
+  async respond(alias: string, action: string, lease: string | undefined, session: string, changing: boolean, closed: () => boolean, signal: AbortSignal): Promise<{ status: number; body: Record<string, unknown> } | null> {
+    const key = sharedVpsControlKey(alias);
+    if (action === "take") {
+      if (!lease) return { status: 400, body: { error: "Shared desktop control requires a control lease" } };
+      if (changing) return { status: 409, body: { error: "The shared VPS desktop is being changed; wait before taking control" } };
+      const result = await this.take(alias, lease, signal, session);
+      if (signal.aborted || closed()) {
+        this.release(alias, lease, session);
+        return null;
+      }
+      return { status: 200, body: { ...this.control.snapshot(key), ...result } };
+    }
+    if (action === "release") {
+      const released = this.release(alias, lease, session);
+      return { status: 200, body: { ...this.control.snapshot(key), released } };
+    }
+    if (action === "check" && lease) {
+      this.touch(alias, lease, session);
+      return { status: 200, body: { ...this.control.snapshot(key), owned: this.owns(alias, lease, session) } };
+    }
+    return { status: 400, body: { error: "action must be take, release, or check" } };
+  }
+
   release(alias: string, lease?: string, session?: string): boolean {
     const seat = this.seats.get(alias);
     if (!seat || (lease && seat.owner.generation !== lease) || (session && seat.session !== session)) return false;

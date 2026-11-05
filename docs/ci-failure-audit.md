@@ -82,7 +82,7 @@ The comparison is the latest main CI [42023353355](https://github.com/TrashCan-D
 
 ### The only change-specific assertion
 
-`scripts/testing/file-size-ratchet.test.ts` already fails on main:
+These line counts are for `d211c6ed`, before the shrink recorded below. `scripts/testing/file-size-ratchet.test.ts` already fails on main:
 
 - `server/boat.ts` is 1261 lines, listed at 1258
 - `server/config.ts` is 1284 lines, listed at 1283
@@ -116,4 +116,14 @@ They are the same failures as main. Counts below are this run's Ubuntu failures.
 
 The remaining failures are the same names and, after normalizing incidental values, the same assertions as main. They include cloud-health ledger mismatches (one case expects 200 buckets and gets 197), Computer panel copy that still describes a sleeping Boat desktop while the panel renders the self-hosted computer, Places rail actions that still expect a hosted Cloud purchase, computer-usage counts that expect a Boat computer, and coordination end-to-end cases that stop on `Unplanned fixture turn` or expect `M-RERUN` and observe `M-CUT`. Those need a per-test reproduction before a product change. They are not evidence that shared desktop mode broke a shard.
 
-No shard failure is a shared-desktop behavior regression. The shared routing, seat, and viewer tests are not in the failing names. The draft stays open: this workspace still has no GCP SSH configuration or Docker CLI, so there is no live VPS check, and the Ubuntu shards remain red for the baseline above.
+No shard failure in that run was a shared-desktop behavior regression. The shared routing, seat, and viewer tests were not in the failing names.
+
+## Fixes after that audit — 6 November 2026
+
+The file-size ratchet now passes. Shared desktop UI moved into `src/components/SharedVpsDesktopControls.tsx`, room updates moved into `server/channel-update.ts`, and the Boat account stub moved into `server/boat-account.ts`. The listed files are at or under their pins, including `server/boat.ts` and `server/config.ts`, which were already over on main.
+
+A recolored bot still named MausBot is adopted again. Forged `[OpenBot assignment]` and `[OpenBot report]` notes are defused; the note scanner still defuses the old `openmausbot` spelling. Analytics remembers that a page already opted in when storage later throws. Boat requests are refused before any network call when the retired account has no token. Fresh-install paths in the data-directory tests expect `~/.openbot`. Vocabulary no longer treats `OpenBot Cloud` as a retired phrase. User-facing strings that said "a OpenBot" in the page publisher and the Cloud-home trust warning now say "an OpenBot".
+
+A local run of the 120 previously failing non-end-to-end files, before the Boat fail-closed change, had 82 files passing and 38 still failing (124 tests). The largest remainder is the Boat protocol suites (`boat-inventory`, `boat-included`, `boat-provision`, `boat-auto-sleep`, `boat-create-idempotency`) and hosted-cloud UI expectations (computer usage counts, the keys page `box` row, Places, Settings groups). Those still describe the removed Boat and hosted Cloud services. End-to-end files were not all rerun in that pass.
+
+The shared desktop itself matches the requested shape: one opt-in container on the default SSH alias, per-bot mode left as the default, a 4 GiB / 2 CPU limit, `unless-stopped`, no public Docker or VNC port, one seat at a time, and bot deletion that does not remove the shared container. This workspace still has no GCP SSH configuration or Docker CLI, so that live check is not done.

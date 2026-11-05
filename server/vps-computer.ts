@@ -244,7 +244,7 @@ function loopbackAnswers(port: number): Promise<boolean> {
   });
 }
 
-function stopDesktopTunnel(botId: string): boolean {
+export function stopDesktopTunnel(botId: string): boolean {
   const tunnel = desktopTunnels.get(botId);
   if (!tunnel) return false;
   desktopTunnels.delete(botId);
@@ -261,10 +261,6 @@ export function closeVpsDesktopTunnel(botId: string) {
     return { closed: false };
   }
   return { closed: stopDesktopTunnel(botId) };
-}
-
-export function stopVpsDesktopTunnel(botId: string): void {
-  stopDesktopTunnel(botId);
 }
 
 export function closeAllVpsDesktopTunnels(): void {

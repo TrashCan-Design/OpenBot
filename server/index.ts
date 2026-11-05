@@ -81,7 +81,7 @@ import {
 import { fitsOnOneLine, parseBotProfilePatch } from "./bot-profile.ts";
 import { routeDirectTurn } from "./turn-route.ts"; import { QuickModelFallback } from "./quick-model-fallback.ts"; import { COMPUTER_JOURNAL_PATH, createSavedSteps, personRequest, savedStepsEnabled } from "./saved-steps/saved-steps.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { RoomTurnDeadline, RoomTurnStallRegistry, effectiveRoomTurnTimeoutMinutes, parseConversationTurnTimeout, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
+import { RoomTurnDeadline, RoomTurnStallRegistry, effectiveRoomTurnTimeoutMinutes, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import { roomTurnEnd, type RoomClaimEnd } from "./room-turn-end.ts";
 import { applyHoldDirective, classifyHoldDirective, heldMemberLine, rememberHeldMessage, stopWordPlacement } from "./room-holds.ts";
 import { createPersonStop } from "./host/person-stop.ts";
@@ -211,7 +211,8 @@ import {
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts";
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
-import { sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { applyChannelUpdate } from "./channel-update.ts";
+import { describeSharedDesktop, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
@@ -2522,7 +2523,7 @@ const sharedVpsSeat = new SharedVpsSeat(turnResources, computerControl, alias =>
       desktopViewer.closeForTarget(`vps/${candidate.id}`);
     }
   }
-  vps.stopVpsDesktopTunnel(sharedVpsOwnerId(alias));
+  vps.stopDesktopTunnel(sharedVpsOwnerId(alias));
 });
 function controlIntegration(
   botId: string,
@@ -3672,123 +3673,16 @@ function createChannel(value: unknown): GroupRecord {
 }
 
 function updateChannel(groupId: string, value: unknown): GroupRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw Object.assign(new Error("body must be a JSON object"), { status: 400 });
-  }
-  const body = value as Record<string, unknown>;
-
-  const existing = store.group(groupId);
-  if (!existing) throw Object.assign(new Error("no such room"), { status: 404 });
-  if (body.memberIds !== undefined && phoneSecretSubmissions.hasGroup(existing.id)) {
-    throw Object.assign(new Error("this channel is securely saving a credential — try again when it finishes"), { status: 409 });
-  }
-  if (
-    channelTaskBlocked(existing) &&
-    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.bulletin !== undefined)
-  ) {
-    throw Object.assign(new Error("this channel is working or waiting on you — finish that turn first"), { status: 409 });
-  }
-  const patch: Record<string, unknown> = {};
-  if (body.name !== undefined) {
-    if (typeof body.name !== "string") throw Object.assign(new Error("room name must be a string"), { status: 400 });
-    const name = body.name.trim();
-    if (!name) throw Object.assign(new Error("room name must not be empty"), { status: 400 });
-    if (name.length > 100) throw Object.assign(new Error("room name must be at most 100 characters"), { status: 400 });
-    if (!fitsOnOneLine(name)) throw Object.assign(new Error("room name must fit on one line"), { status: 400 });
-    patch.name = name;
-  }
-  if (body.bulletin !== undefined) {
-    if (typeof body.bulletin !== "string") throw Object.assign(new Error("bulletin must be a string"), { status: 400 });
-    if (body.bulletin.length > 12_000) {
-      throw Object.assign(new Error("bulletin must be at most 12000 characters"), { status: 400 });
-    }
-    patch.bulletin = body.bulletin;
-  }
-  if (body.description !== undefined) {
-    if (typeof body.description !== "string") throw Object.assign(new Error("description must be a string"), { status: 400 });
-    const trimmed = body.description.trim();
-    if (!trimmed) patch.description = undefined;
-    else if (/[\n\r]/.test(trimmed)) throw Object.assign(new Error("description must be a single line"), { status: 400 });
-    else if (trimmed.length > 120) throw Object.assign(new Error("description must be at most 120 characters"), { status: 400 });
-    else patch.description = trimmed;
-  }
-  if (body.unread !== undefined) {
-    if (typeof body.unread !== "boolean") throw Object.assign(new Error("unread must be true or false"), { status: 400 });
-    patch.unread = body.unread;
-  }
-  if (body.memberIds !== undefined) {
-    if (existing.dm) throw Object.assign(new Error("direct-message channels cannot change members"), { status: 400 });
-    const roster = checkedMemberIds(body.memberIds);
-    if (!roster.ok) throw Object.assign(new Error(roster.error.replace("channel", "room")), { status: 400 });
-    const audienceConflict = roomAudienceConflict(roster.memberIds, existing.memberIds);
-    if (audienceConflict) throw Object.assign(new Error(audienceConflict), { status: 400 });
-    const removedGoalLead = routines!.listRoutines().some(
-      (routine) =>
-        routine.enabled &&
-        routine.target === "room-goal" &&
-        routine.groupId === existing.id &&
-        !roster.memberIds.includes(routine.botId),
-    ) || routines!.listRuns().some(
-      (run) =>
-        run.target === "room-goal" &&
-        run.groupId === existing.id &&
-        ["queued", "running", "waiting"].includes(run.status) &&
-        !roster.memberIds.includes(run.botId),
-    );
-    if (removedGoalLead) {
-      throw Object.assign(new Error("pause or reassign this room's team-goal routine before removing its lead"), { status: 409 });
-    }
-    patch.memberIds = roster.memberIds;
-  }
-  if (body.defaultResponder !== undefined) {
-    const memberIds = (patch.memberIds as string[] | undefined) ?? existing.memberIds;
-    const responder = checkedGroupResponder(body.defaultResponder, memberIds);
-    if (!responder) throw Object.assign(new Error("invalid default responder"), { status: 400 });
-    patch.defaultResponder = responder;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, "turnTimeoutMinutes")) {
-    if (!existing.dm) {
-      throw Object.assign(new Error("set the turn limit on that conversation"), { status: 400 });
-    }
-    const parsed = parseConversationTurnTimeout(body.turnTimeoutMinutes);
-    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 });
-    patch.turnTimeoutMinutes = parsed.minutes;
-  }
-  if (body.cwd !== undefined) {
-    if (existing.dm) throw Object.assign(new Error("direct-message channels cannot have a working folder"), { status: 400 });
-    if (existing.pinnedCwd !== undefined) {
-      throw Object.assign(new Error("the room's working folder is fixed after its first turn"), { status: 409 });
-    }
-    const checked = validateBotCwd(body.cwd);
-    if (!checked.ok) throw Object.assign(new Error(checked.error), { status: 400 });
-    patch.cwd = checked.cwd ?? undefined;
-  }
-  if (body.pinnedMessageId !== undefined) {
-    if (body.pinnedMessageId === null || body.pinnedMessageId === "") patch.pinnedMessageId = undefined;
-    else if (typeof body.pinnedMessageId === "string" && /^[\w-]+$/.test(body.pinnedMessageId)) {
-      patch.pinnedMessageId = body.pinnedMessageId;
-    } else throw Object.assign(new Error("pinnedMessageId must be a message id"), { status: 400 });
-  }
-  if (body.section !== undefined) {
-    if (body.section === null) patch.section = undefined;
-    else if (typeof body.section !== "string") throw Object.assign(new Error("section must be a string"), { status: 400 });
-    else {
-      const trimmed = body.section.trim();
-      if (!trimmed) patch.section = undefined;
-      else if (trimmed.length > 60) throw Object.assign(new Error("section must be at most 60 characters"), { status: 400 });
-      else patch.section = trimmed;
-    }
-  }
-  // Admin-only, and the only way a room's floor widens; a Chief's PATCH never has it.
-  const resetAudience = body.resetAudience !== undefined;
-  if (resetAudience) {
-    if (body.resetAudience !== true) throw Object.assign(new Error("resetAudience must be true"), { status: 400 });
-    patch.audienceFloor = undefined;
-  }
-  const group = store.patchGroup(groupId, patch);
-  if (resetAudience) audienceChanged();
-  if (!group) throw Object.assign(new Error("no such room"), { status: 404 });
-  return group;
+  return applyChannelUpdate(groupId, value, {
+    group: (id) => store.group(id),
+    patchGroup: (id, patch) => store.patchGroup(id, patch),
+    secretBusy: (id) => phoneSecretSubmissions.hasGroup(id),
+    blocked: channelTaskBlocked,
+    members: checkedMemberIds,
+    audienceConflict: roomAudienceConflict,
+    routines: () => routines!,
+    audienceChanged,
+  });
 }
 
 const channelTaskBlocked = (group: GroupRecord) =>
@@ -5785,23 +5679,17 @@ function botComputerControlKey(bot: BotRecord): string {
 function sharedVpsSnapshot(bot: BotRecord) {
   if (bot.vpsDesktopMode !== "shared") return { mode: "per-bot" as const };
   const alias = vpsSshAliasForBot(cfg, bot);
-  if (!alias) return { mode: "shared" as const, activeBot: null, waitingQueue: [], controller: null };
-  const resource = sharedVpsResource(alias);
-  const participant = (owner: TurnOwner) => store.botByThread(owner.threadId) ??
-    store.bots.find(candidate => activeVpsThreads.get(candidate.id)?.has(owner.threadId) &&
-      candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === alias);
-  const holder = turnResources.holder(resource);
-  const activeBot = holder && !holder.threadId.startsWith("shared-vps-person:") ? participant(holder) : null;
-  return {
-    mode: "shared" as const,
-    activeBot: activeBot ? { id: activeBot.id, name: activeBot.name } : null,
-    controller: computerControl.snapshot(sharedVpsControlKey(alias)).held ? "person" as const : activeBot ? "bot" as const : null,
-    waitingQueue: turnResources.waiting(resource).map(owner => {
-      if (owner.threadId.startsWith("shared-vps-person:")) return { id: "person", name: "You" };
-      const waitingBot = participant(owner);
-      return { id: waitingBot?.id ?? owner.threadId, name: waitingBot?.name ?? "Bot" };
-    }),
-  };
+  const resource = alias ? sharedVpsResource(alias) : "";
+  return describeSharedDesktop({
+    alias, holder: alias ? turnResources.holder(resource) ?? null : null,
+    waiting: alias ? turnResources.waiting(resource) : [],
+    personControls: alias ? computerControl.snapshot(sharedVpsControlKey(alias)).held : false,
+    botFor: (owner) => {
+      const found = store.botByThread(owner.threadId) ?? store.bots.find(candidate => activeVpsThreads.get(candidate.id)?.has(owner.threadId) &&
+        candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === alias);
+      return found ? { id: found.id, name: found.name } : null;
+    },
+  });
 }
 
 /** Waits here up to COMPUTER_CALL_WAIT_MS; a call that waited through a person's hold, or whose turn ended, is never performed. */
@@ -15516,33 +15404,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const alias = currentBot.cloudBackend === "vps" && currentBot.vpsDesktopMode === "shared"
           ? vpsSshAliasForBot(cfg, currentBot) : null;
         if (alias) {
-          const key = sharedVpsControlKey(alias);
-          if (action === "take") {
-            if (!controlLeaseId) return json(res, 400, { error: "Shared desktop control requires a control lease" });
-            if (boatLifecycleBusyBots.has(sharedVpsOwnerId(alias)) || vps.vpsLifecycleBusy()) {
-              return json(res, 409, { error: "The shared VPS desktop is being changed; wait before taking control" });
-            }
-            const cancelled = new AbortController();
-            const onClose = () => cancelled.abort();
-            res.once("close", onClose);
-            try {
-              const result = await sharedVpsSeat.take(alias, controlLeaseId, cancelled.signal, auth.kind === "session" ? auth.session.id : "loopback");
-              if (cancelled.signal.aborted || res.destroyed) {
-                sharedVpsSeat.release(alias, controlLeaseId, auth.kind === "session" ? auth.session.id : "loopback");
-                return;
-              }
-              return json(res, 200, { ...computerControl.snapshot(key), ...result });
-            } finally { res.off("close", onClose); }
-          }
-          if (action === "release") {
-            const released = sharedVpsSeat.release(alias, controlLeaseId, auth.kind === "session" ? auth.session.id : "loopback");
-            return json(res, 200, { ...computerControl.snapshot(key), released });
-          }
-          if (action === "check" && controlLeaseId) {
-            sharedVpsSeat.touch(alias, controlLeaseId, auth.kind === "session" ? auth.session.id : "loopback");
-            return json(res, 200, { ...computerControl.snapshot(key), owned: sharedVpsSeat.owns(alias, controlLeaseId, auth.kind === "session" ? auth.session.id : "loopback") });
-          }
-          return json(res, 400, { error: "action must be take, release, or check" });
+          const session = auth.kind === "session" ? auth.session.id : "loopback";
+          const cancelled = new AbortController();
+          const onClose = () => cancelled.abort();
+          if (action === "take") res.once("close", onClose);
+          try {
+            const answer = await sharedVpsSeat.respond(alias, action, controlLeaseId, session,
+              boatLifecycleBusyBots.has(sharedVpsOwnerId(alias)) || vps.vpsLifecycleBusy(),
+              () => cancelled.signal.aborted || res.destroyed, cancelled.signal);
+            if (!answer) return;
+            return json(res, answer.status, answer.body);
+          } finally { if (action === "take") res.off("close", onClose); }
         }
         if (action === "release") cloudComputerPower.renew(controlKey);
         if (action === "take" && (boatLifecycleBusyBots.has(bot.id) || boatLifecycleBusyBots.has(controlKey))) {

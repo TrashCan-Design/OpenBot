@@ -307,8 +307,7 @@ export interface Bot extends DefaultBotFields, Pick<WireBot, "mascotFaceColor" |
   modelSelection: ModelSelection;
   computer?: "cloud" | "vm" | "local" | "browser" | "off";
   cloudBackend?: CloudBackend;
-  autoStartVps?: boolean;
-  vpsDesktopMode?: "per-bot" | "shared";
+  autoStartVps?: boolean; vpsDesktopMode?: "per-bot" | "shared";
   vpsAlias?: string;
   cwd?: string;
   autoApprove?: boolean;

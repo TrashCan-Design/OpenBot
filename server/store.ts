@@ -376,14 +376,8 @@ export class Store {
         delete b.cloudBackend;
         botsMigrated = true;
       }
-      if (b.autoStartVps !== undefined && b.autoStartVps !== true && b.autoStartVps !== false) {
-        delete b.autoStartVps;
-        botsMigrated = true;
-      }
-      if (b.vpsDesktopMode !== undefined && b.vpsDesktopMode !== "per-bot" && b.vpsDesktopMode !== "shared") {
-        delete b.vpsDesktopMode;
-        botsMigrated = true;
-      }
+      if (b.autoStartVps !== undefined && b.autoStartVps !== true && b.autoStartVps !== false) { delete b.autoStartVps; botsMigrated = true; }
+      if (b.vpsDesktopMode !== undefined && b.vpsDesktopMode !== "per-bot" && b.vpsDesktopMode !== "shared") { delete b.vpsDesktopMode; botsMigrated = true; }
       if (b.managedSections !== undefined && (!b.chiefOfStaff || !Array.isArray(b.managedSections) ||
           b.managedSections.length > 100 || b.managedSections.some(section => typeof section !== "string" || section.length > 60))) {
         delete b.managedSections;
