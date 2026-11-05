@@ -16,6 +16,7 @@ import {
   MANAGED_LABEL,
 } from "./container-computer.ts";
 import { VPS_CONTAINER_LABEL, VPS_IMAGE, VPS_MANAGED_LABEL, VPS_VIEWER_LABEL, vpsContainerName } from "./vps-computer.ts";
+import { sharedVpsOwnerId } from "./shared-vps.ts";
 import { CONTROL_BUSY, CONTROL_REFUSAL_PLAIN, controlRefusal, createControlClient } from "./control-client.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import type { RoutineSchedule } from "../shared/routines.ts";
@@ -286,6 +287,43 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
       expect(calls).not.toMatch(/ssh:\/\/production-vps (run|start|stop|rm|pull|build) /);
     } finally { rmSync(marker, { force: true }); }
   });
+
+  it("shares one installation-owned desktop, serializes human control, and survives bot deletion", async () => {
+    expect((await api("PUT", "/api/config", { vps: { sshAlias: "production-vps" } })).status).toBe(200);
+    const alpha = (await api("POST", "/api/bots")).body.bot;
+    const beta = (await api("POST", "/api/bots")).body.bot;
+    for (const bot of [alpha, beta]) {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        computer: "cloud", cloudBackend: "vps", vpsDesktopMode: "shared",
+      })).status).toBe(200);
+    }
+    const first = await api("GET", `/api/bots/${alpha.id}/computer`);
+    const second = await api("GET", `/api/bots/${beta.id}/computer`);
+    expect(first.body.container_name).toBe(vpsContainerName(sharedVpsOwnerId("production-vps")));
+    expect(second.body.container_name).toBe(first.body.container_name);
+    expect(first.body.sharedDesktop.mode).toBe("shared");
+    const unreachable = join(dirname(dockerLog), "unreachable.production-vps");
+    writeFileSync(unreachable, "offline");
+    try {
+      const failed = await api("POST", `/api/bots/${beta.id}/computer/provision`, {});
+      expect(failed.status).toBe(409);
+      expect(failed.body.error).toMatch(/Docker over SSH/i);
+    } finally { rmSync(unreachable, { force: true }); }
+    expect((await api("POST", `/api/bots/${beta.id}/computer/provision`, {})).body.ready).toBe(true);
+    const lease = "a".repeat(24);
+    const takeover = await api("POST", `/api/bots/${alpha.id}/computer/control`, { action: "take", controlLeaseId: lease });
+    expect(takeover.body).toMatchObject({ held: true, owned: true });
+    expect((await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop.controller).toBe("person");
+    expect((await api("POST", `/api/bots/${beta.id}/computer/join`, {})).status).toBe(200);
+    expect((await api("POST", `/api/bots/${beta.id}/computer/control`, { action: "take", controlLeaseId: "b".repeat(24) })).status).toBe(409);
+    expect((await api("POST", `/api/bots/${beta.id}/computer/remove`, {})).status).toBe(409);
+    expect((await api("POST", `/api/bots/${beta.id}/computer/control`, { action: "release", controlLeaseId: lease })).body.released).toBe(true);
+    expect((await api("GET", `/api/desktop-viewer/vps/${beta.id}`)).status).toBe(403);
+    const offset = readFileSync(dockerLog, "utf8").length;
+    expect((await api("DELETE", `/api/bots/${alpha.id}`)).status).toBe(200);
+    expect(readFileSync(dockerLog, "utf8").slice(offset)).not.toMatch(/ rm -f /);
+    expect((await api("GET", `/api/bots/${beta.id}/computer`)).body.container_name).toBe(second.body.container_name);
+  }, 30_000);
 
   it.each([
     {

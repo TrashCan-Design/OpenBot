@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
   held: false,
   /** Whether a take with a lease gets it: false plays a hold someone else already has. */
   owned: true,
+  sharedStatus: false,
   controls: [] as Array<{ action?: string; controlLeaseId?: string }>,
   posts: [] as string[],
   beacons: [] as Array<{ url: string; body: Record<string, unknown>; keepalive: boolean }>,
@@ -69,7 +70,8 @@ vi.mock("@/state/store", async (importOriginal) => ({
     }
     if (route === "/api/bots/scout/local-computer/screenshot") return { image: "data:image/png;base64,FRAME" };
     if (route === "/api/bots/scout/computer") {
-      return { configured: true, ready: true, managed: true, imageMatches: true, container: "running", problem: null, box: { state: "ready" } };
+      return { configured: true, ready: true, managed: true, imageMatches: true, container: "running", problem: null, box: { state: "ready" },
+        ...(fixture.sharedStatus ? { sharedDesktop: { mode: "shared", controller: "bot", activeBot: { id: "alpha", name: "Alpha" }, waitingQueue: [{ id: "beta", name: "Beta" }] } } : {}) };
     }
     if (route === "/api/bots/scout/computer/screenshot") return { png: "FRAME", format: "png" };
     if (route === "/api/bots/scout/computer/join") return { joinUrl: "https://desktop.invalid/scout" };
@@ -148,6 +150,7 @@ beforeEach(() => {
   });
   fixture.held = false;
   fixture.owned = true;
+  fixture.sharedStatus = false;
   fixture.controls = [];
   fixture.posts = [];
   fixture.beacons = [];
@@ -271,6 +274,15 @@ describe("taking control of a Local VM", () => {
 });
 
 describe("taking control of other computers", () => {
+  it("shows the shared desktop holder and queue while preserving Take Control", async () => {
+    fixture.sharedStatus = true;
+    await open(makeBot({ computer: "cloud", cloudBackend: "vps", vpsDesktopMode: "shared" }));
+    expect(document.body.textContent).toContain("Shared VPS Desktop");
+    expect(document.body.textContent).toContain("Alpha is using it");
+    expect(document.body.textContent).toContain("Waiting: Beta");
+    expect(button("Take control")).toBeDefined();
+  });
+
   it("a VPS is driven in place too, and handing back closes its viewer tunnel", async () => {
     await open(makeBot({ computer: "cloud", cloudBackend: "vps" }));
     await press("Take control");

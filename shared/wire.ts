@@ -314,6 +314,8 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   cloudBackend?: CloudBackend;
   /** Auto mode may prepare/start this bot's managed VPS container. */
   autoStartVps?: boolean;
+  /** Opt-in: bots using the same SSH host operate its installation-owned persistent desktop. */
+  vpsDesktopMode?: "per-bot" | "shared";
   /** This bot's own SSH config alias for its managed VPS computer; absent
    * means the default server from Settings → API keys. */
   vpsAlias?: string;

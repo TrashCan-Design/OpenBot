@@ -47,6 +47,10 @@ export class TurnResources {
     return index < 0 ? undefined : index + 1;
   }
 
+  waiting(resource: string): readonly TurnOwner[] {
+    return [...(this.waiters.get(resource) ?? [])];
+  }
+
   noteWait(resource: string, waitedMs: number): void {
     if (!Number.isFinite(waitedMs) || waitedMs < 0) return;
     const sample = Math.min(waitedMs, 24 * 60 * 60_000);

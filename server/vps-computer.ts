@@ -263,6 +263,10 @@ export function closeVpsDesktopTunnel(botId: string) {
   return { closed: stopDesktopTunnel(botId) };
 }
 
+export function stopVpsDesktopTunnel(botId: string): void {
+  stopDesktopTunnel(botId);
+}
+
 export function closeAllVpsDesktopTunnels(): void {
   for (const botId of desktopTunnels.keys()) stopDesktopTunnel(botId);
 }

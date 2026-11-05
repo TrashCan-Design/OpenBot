@@ -63,3 +63,11 @@ its verification server logs `listen EPERM` for the Unix permission-broker
 socket, so the fake Claude turn never writes the dump file and 14 cases time
 out at that shared setup point. The CI failures reached later assertions,
 which distinguishes them from this local environment restriction.
+
+## Shared VPS change baseline — 6 November 2026
+
+The 16-shard failure refers to the older push workflow; the scheduled main matrix has 20 Vitest jobs. The broad failures were already present before the Shared VPS Desktop branch. Their causes include stale OpenMausBot text assertions, fixtures for removed Boat/hosted Cloud behavior, and retained-feature tests that require separate diagnosis. The VPS routing suite passed 14/14 after its test expectations were corrected; it does not prove the new shared mode. Local E2E server fixtures in this workspace may fail at Unix permission-broker `listen EPERM`, before reaching their assertions. New shared-mode failures must be assessed against this baseline, never counted as covered by it.
+
+The first Shared VPS routing run failed at server startup because the new seat class used TypeScript constructor parameter properties, unsupported by Node's strip-only loader. Explicit fields fixed this. A subsequent 14-test run had one regression: deleting a per-bot VPS scanned the default host as well as its overridden host, violating alias isolation. The deletion scan now keeps its original one-host scope for per-bot mode; shared mode scans both aliases only to find previously owned per-bot containers. The next run passed all 14 existing cases plus the new shared case. These were new change-specific failures, separate from the old matrix failures.
+
+The `server/system-prompt.test.ts` run on this branch had five failures in assertions that still require `OpenMausBot`/`MausBot Cloud` wording. All shared VPS prompt assertions passed. The five failed names are “distinguishes background window control,” “prefers a saved login,” “says the bot runs in the cloud,” “points to a lent computer,” and “names the person's computer by its platform.” Those are the existing branding/removed hosting baseline; they should be corrected in a separate test migration without reinstating vendor services.

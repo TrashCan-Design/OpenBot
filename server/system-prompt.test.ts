@@ -38,6 +38,7 @@ describe("resolveComputerPromptKind", () => {
     [{ kind: "vm", vmPrivate: true }, "vm-private"],
     [{ kind: "box", vmPrivate: false }, "box"],
     [{ kind: "vps", vmPrivate: false }, "vps"],
+    [{ kind: "vps", vmPrivate: false, vpsShared: true }, "vps-shared"],
     [{ kind: "local", vmPrivate: false }, "local"],
     [{ kind: null, vmPrivate: true }, null],
   ] as const)("resolves %j to %s", (input, expected) => {
@@ -53,6 +54,7 @@ describe("computerPrompt", () => {
       "vm-shared": "shared, isolated Cua sandbox",
       box: "You control the assigned cloud computer",
       vps: "This is the user's own VPS",
+      "vps-shared": "Other authorized bots use the same browser sessions",
       local: "act on the user's computer",
     };
     for (const [kind, distinct] of Object.entries(paragraphs)) {

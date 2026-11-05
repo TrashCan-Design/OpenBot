@@ -29,6 +29,7 @@ export const botDefaultsProfileSchema = profilePatchSchema.extend({
   computer: z.enum(["cloud", "vm", "local", "browser", "off"]).nullable().optional(),
   cloudBackend: z.enum(["box", "vps"]).optional(),
   autoStartVps: z.boolean().optional(),
+  vpsDesktopMode: z.enum(["per-bot", "shared"]).optional(),
   cwd: z.string().max(4096).nullable().optional(),
   approvalMode: z.enum(["ask", "auto", "full", "custom"]).optional(),
   alwaysAllow: strings(200, 500).optional(),
