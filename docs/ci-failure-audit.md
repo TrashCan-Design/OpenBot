@@ -52,3 +52,14 @@ were updated to match the retained self-hosted VPS route and OpenBot wording.
 The fourth, a computer lease contention assertion, failed in that initial
 run but passed alone and in two complete suite runs. No product routing code
 was changed for this intermittent result; the full suite passed 14/14 twice.
+
+## Independent threads follow-up
+
+The 5 November Ubuntu shard 4 log showed four failures in
+`server/independent-threads-api.test.ts`, all at assertions expecting an
+`OpenMausBot` approval or teammate report prefix. Those expectations now use
+`OpenBot`. A local full run cannot confirm this E2E suite in this workspace:
+its verification server logs `listen EPERM` for the Unix permission-broker
+socket, so the fake Claude turn never writes the dump file and 14 cases time
+out at that shared setup point. The CI failures reached later assertions,
+which distinguishes them from this local environment restriction.
