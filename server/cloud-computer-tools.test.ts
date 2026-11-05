@@ -65,7 +65,7 @@ describe("cloud computer tools", () => {
     ["open_url", { url: "https://example.com/?a='&b=2" }, "xdg-open"],
     ["exec", { command: "printf hello" }, "printf hello"],
     ["get_screen_size", {}, "getdisplaygeometry"],
-  ] as const)("runs %s on the assigned Boat only, with the server's own account", async (name, args) => {
+  ] as const)("runs %s on the assigned Boat only, with the server's own account", async (name, args, _expected) => {
     const call = rpc({ method: "tools/call", params: { name, arguments: args } });
     await expect(call.done).rejects.toThrow(/Boat is unavailable in OpenBot/);
     expect(calls).toEqual([]);
