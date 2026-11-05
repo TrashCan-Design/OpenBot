@@ -73,3 +73,47 @@ The first Shared VPS routing run failed at server startup because the new seat c
 The `server/system-prompt.test.ts` run on this branch had five failures in assertions that still require `OpenMausBot`/`MausBot Cloud` wording. All shared VPS prompt assertions passed. The five failed names are “distinguishes background window control,” “prefers a saved login,” “says the bot runs in the cloud,” “points to a lent computer,” and “names the person's computer by its platform.” Those are the existing branding/removed hosting baseline; they should be corrected in a separate test migration without reinstating vendor services.
 
 PR #7's first CI run failed its `typecheck + lint` gate at `scripts/testing/verification-docs.test.ts`: the new `shared-vps-desktop.md` recipe was not linked from `docs/verification/README.md`. The README link was added and the documentation test rerun. This was a newly introduced CI documentation gate failure, separate from the old Vitest shard failures.
+
+## PR #7 Ubuntu shards — 6 November 2026, 1:03 AM IST
+
+Completed run [42090695658](https://github.com/TrashCan-Design/OpenBot/actions/runs/42090695658) is on `d211c6ed`. The required gate passed, and so did behavior evals, the packaged server smoke, macOS smokes, the open-source edition build, renderer smoke, browser identity, the Ubuntu package smoke, and browser driver S4. All eight Ubuntu Vitest shards failed. This pull request's workflow did not run the Windows Vitest shards. The aggregate CI check is red because of those eight shards.
+
+The comparison is the latest main CI [42023353355](https://github.com/TrashCan-Design/OpenBot/actions/runs/42023353355) at `e37c791`, the parent of this branch. That run failed the same eight Ubuntu shards (and eight Windows shards). Both Ubuntu logs contain the same 541 failing test names. After ignoring ports, timestamps, generated ids, and home-directory suffixes, one assertion body differs.
+
+### The only change-specific assertion
+
+`scripts/testing/file-size-ratchet.test.ts` already fails on main:
+
+- `server/boat.ts` is 1261 lines, listed at 1258
+- `server/config.ts` is 1284 lines, listed at 1283
+
+Those two counts are unchanged on this branch. The shared desktop work adds six further pins, which is why this branch's failure text is longer:
+
+| File | Main lines | This branch | Why it grew |
+| --- | ---: | ---: | --- |
+| `server/index.ts` | 15808 | 15936 | Shared desktop routes, lease checks, and viewer binding |
+| `src/components/ComputerPanel.tsx` | 1821 | 1849 | Shared controller and queue in the Computer panel |
+| `server/store.ts` | 2323 | 2327 | Drops an invalid `vpsDesktopMode` while loading a bot |
+| `server/vps-computer.ts` | 1369 | 1373 | `stopVpsDesktopTunnel` for handing the seat back |
+| `src/state/store.tsx` | 3379 | 3380 | `vpsDesktopMode` on the client bot |
+| `shared/wire.ts` | 1000 | 1002 | The same field on the wire bot; 1000 is the listing threshold |
+
+The ratchet allows a count to go down, not up, and a file crossing 1,000 lines has to be listed with a reason. These pins were not raised. Moving the new code out of the listed files would remove this branch's extra lines from the failure. It would not turn the shard green while `boat.ts` and `config.ts` stay over their pins.
+
+### Why the other 540 failures happen
+
+They are the same failures as main. Counts below are this run's Ubuntu failures. Several tests match more than one story; the first matching story owns the count.
+
+| Tests | Why they fail |
+| ---: | --- |
+| 267 | The product string is `OpenBot` and the assertion still requires `OpenMausBot`, `MausBot`, or `openmausbot`. Report prefixes, CLI banners, system prompts, default-bot intros, locale lines, and container errors are in this group. One of them is not a stale label: `server/default-bot.test.ts` "keeps the colour the person gave an adopted MausBot" seeds a bot named `MausBot`, recolors it, and expects that same bot back. `seededMausBot` adopts the oldest bot only when its name is `DEFAULT_BOT_NAME` (`OpenBot`) or its color is still silver, so a recolored legacy bot is skipped and a new OpenBot is created. |
+| 79 | Boat and the hosted cloud are intentionally unavailable. Thirty `server/index.test.ts` cases get HTTP 410 where they expect 200, 400, or 409. The route body is `Boat is unavailable in OpenBot`. Inventory, provisioning, and included-account tests expect `configured: true` and get `configured: false`, or they expect a Boat API call and get `Boat is not configured`. |
+| 15 | `server/live-call.e2e.test.ts` expects the first `POST /api/live/session` to return 201. `server/routes/live.ts` answers 409 `needsKey` when no OpenAI key is configured, so the suite never reaches the second-client case. |
+| 15 | Analytics no longer sends unless it is explicitly on. `analyticsEnabled()` is false when the desktop switch is unset and `localStorage` does not contain the opt-out key set to `"0"`. `initAnalytics()` returns immediately, and `sendDailySnapshot()` returns false, so the usage-snapshot tests see no event and no stored day. |
+| 5 | `server/mcp-trim.test.ts` parses the trimmed tool text as JSON. The trim banner still carries the old product prefix in the assertion's expected shape, and `JSON.parse` throws on the trailing banner. |
+| 4 | `src/locales/vocabulary.test.ts` forbids the phrase it also requires. `RETIRED` contains `["OpenBot Cloud", /OpenBot Cloud/i, "OpenBot Cloud"]`, so English strings and the "good" example `Sign in to OpenBot Cloud` are reported as retired wording. That entry is the old product name rewritten into the new one. |
+| 1 | `server/legacy-migration.test.ts` looks for `~/.openmausbot` after booting a `~/.opengrokbot` home. A fresh home selects `~/.openbot` (`server/config.ts`), and the rename target is that directory. An existing `~/.openmausbot` is kept when `~/.openbot` is absent. `server/bot-folder.test.ts` hardcodes the old fresh-install directory and sees `.openbot`. |
+
+The remaining failures are the same names and, after normalizing incidental values, the same assertions as main. They include cloud-health ledger mismatches (one case expects 200 buckets and gets 197), Computer panel copy that still describes a sleeping Boat desktop while the panel renders the self-hosted computer, Places rail actions that still expect a hosted Cloud purchase, computer-usage counts that expect a Boat computer, and coordination end-to-end cases that stop on `Unplanned fixture turn` or expect `M-RERUN` and observe `M-CUT`. Those need a per-test reproduction before a product change. They are not evidence that shared desktop mode broke a shard.
+
+No shard failure is a shared-desktop behavior regression. The shared routing, seat, and viewer tests are not in the failing names. The draft stays open: this workspace still has no GCP SSH configuration or Docker CLI, so there is no live VPS check, and the Ubuntu shards remain red for the baseline above.

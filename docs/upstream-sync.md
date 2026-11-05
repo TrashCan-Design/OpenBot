@@ -7,9 +7,18 @@
 | 2026-11-02 (Asia/Kolkata) | `6e32504b9d08674834bef034d76787751f39d9a3` | `007f92a317a5e4deca0a3553f8396036668f3503` | Reviewed 11 new upstream fixes. Ported coordination, key-engine hints, active remote notifications, Cursor MCP repeat detection, and Windows lease fixes. The rail wording fix has no matching key or UI in this fork. |
 | 2026-11-03 (Asia/Kolkata) | `f52effc1a5871e4e54b3d2c699336a28c6cb1f97` | `35d74856cbc555b2224ca7b424f4cb5da0e77479` | Reviewed 71 subsequent commits (including merges), porting applicable memory writes, capture flushing, Windows test timing, completion notices, self-hosted pairing, remote computer UI, browser fake-IP rules, IME input, bubble wrapping, ACP provider errors and 429 handling, local-model tool budget, mascot scheduling, and initial page titles. Adapted updater tests to the local-only bridge and isolated their state per test. |
 | 2026-11-06 (Asia/Kolkata) | `aede7d817df9bc4142ab569128d4462dcdee1b31` | `e37c79138006d659723436d4e64875b3f9f8f590` | Reviewed commits since the 5 November upstream check `e7317a7`. Ported the retained turn-watchdog sleep correction (`e39d9b0`) with a focused regression test. The remaining new fixes concern removed hosted accounts, unrelated integrations or UI, and Mac Docker discovery; they do not alter the Windows self-hosted VPS path in this change. |
+| 2026-11-06 (Asia/Kolkata, later) | `dd64479da27bc43812615b83907df38e1f9e805b` | `e37c79138006d659723436d4e64875b3f9f8f590` | Two first-parent merges landed after `aede7d817` (00:06 and 00:40 IST). Neither is ported. |
 
 The fork retains local and self-hosted features. Upstream changes that require
 MausBot-hosted accounts, billing, or Boat computers are not ported.
+
+The 6 November follow-up is upstream `dd64479da`. Pull request #4549 only
+collapses one optimistic-message call in `src/state/store.tsx` and rebuilds
+`shared/app-frame/app-host.html`. This fork's store does not have that call.
+Pull request #4504 adds Brazilian Portuguese across 626 files, including
+hosted-cloud copy. It also lazy-loads `undici` from
+`server/drivers/openai-chat-fetch.ts`, a module this fork does not have. The
+locale itself is not a bug fix for a retained path, so it stays upstream.
 
 The Claude account-config fix (`785be84`) changes a module absent from this fork.
 The engine startup cache change (`3a2d563`) depends on upstream performance
