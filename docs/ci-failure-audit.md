@@ -38,5 +38,17 @@ describes the earlier push run, which had no macOS Vitest matrix.
 The separate [Docker image run 41584918324](https://github.com/TrashCan-Design/OpenBot/actions/runs/41584918324)
 failed because its volume-lock smoke expected “Another MausBot home” while the
 server correctly said “Another OpenBot home.” The relevant workflow assertion
-and `server/cloud-home.test.ts` expectations have been corrected. A full Docker
-image run is still required to verify later steps in that workflow.
+and `server/cloud-home.test.ts` expectations were corrected in PR #4. The later
+[main Docker run 42017833571](https://github.com/TrashCan-Design/OpenBot/actions/runs/42017833571)
+passed its full smoke and GHCR publish jobs.
+
+## VPS routing follow-up
+
+The retained `server/vps-routing.test.ts` suite initially had four failures.
+Two expected the removed `cloudBackend: "box"` choice to succeed or return an
+active-turn conflict; the route rejects it with 400 before checking turn state.
+One expected the old `OpenMausBot` VPS error text. Those three test assertions
+were updated to match the retained self-hosted VPS route and OpenBot wording.
+The fourth, a computer lease contention assertion, failed in that initial
+run but passed alone and in two complete suite runs. No product routing code
+was changed for this intermittent result; the full suite passed 14/14 twice.
