@@ -12,13 +12,15 @@ export function startupBackups(bot: { fallback?: Backup[] }, recovery?: { enable
   return recovery?.enabled && recovery.backup ? [recovery.backup] : [];
 }
 
-/** An automatic switch must not strand the task without its tools or move its filesystem to another machine. */
+/** An automatic switch must not strand the task without its tools or move its filesystem to another machine. A USB
+ * phone is a local device capability rather than a tool needed to carry on the bot's task; counting it would reject
+ * compatible backups when Claude reaches its usage limit. */
 export function recoveryCapabilityError(from: Engine, to: Engine): string | undefined {
   if (supportsWorkspaceFiles(from.driverKind) !== supportsWorkspaceFiles(to.driverKind)) {
     return "The backup cannot use the same workspace.";
   }
   const tools = ["agentsMcp", "computerMcp", "composioMcp", "dataMcp", "highlevelMcp", "deviceMcp",
-    "phoneMcp", "browserMcp", "localComputerMcp", "customMcp", "images"] as const;
+    "browserMcp", "localComputerMcp", "customMcp", "images"] as const;
   if (tools.some(key => from.capabilities[key] === true && to.capabilities[key] !== true)) {
     return "The backup does not support all of this AI's tools and attachments.";
   }

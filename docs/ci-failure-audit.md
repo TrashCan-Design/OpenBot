@@ -26,3 +26,17 @@ These groups overlap; the raw failure counts are not disjoint root-cause counts.
 This audit classifies failures, but it does **not** certify the entire Vitest
 suite or every retained feature. PR #3's focused updater, memory, browser,
 ACP, and UI tests passed locally before this audit.
+
+## Follow-up — 5 November 2026
+
+The scheduled main run [41948570769](https://github.com/TrashCan-Design/OpenBot/actions/runs/41948570769)
+failed its 20 Vitest jobs: eight Ubuntu, eight Windows, and four macOS shards.
+Its 17 other jobs, including typecheck/lint, the Ubuntu package smoke, and the
+Windows browser and CUA smokes, succeeded. The historical 16-shard count above
+describes the earlier push run, which had no macOS Vitest matrix.
+
+The separate [Docker image run 41584918324](https://github.com/TrashCan-Design/OpenBot/actions/runs/41584918324)
+failed because its volume-lock smoke expected “Another MausBot home” while the
+server correctly said “Another OpenBot home.” The relevant workflow assertion
+and `server/cloud-home.test.ts` expectations have been corrected. A full Docker
+image run is still required to verify later steps in that workflow.
