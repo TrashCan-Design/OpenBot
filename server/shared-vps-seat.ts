@@ -63,6 +63,7 @@ export class SharedVpsSeat {
     this.resources.startWaiting(resource, owner);
     try {
       while (Date.now() < deadline && !signal?.aborted) {
+        if (this.owns(alias, lease, session)) return { held: true, owned: true, acquired: false };
         if (this.control.snapshot(sharedVpsControlKey(alias)).held) {
           throw Object.assign(new Error("The shared desktop is controlled by another session"), { status: 409 });
         }

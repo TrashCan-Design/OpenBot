@@ -85,6 +85,7 @@ describe("shared VPS desktop ownership", () => {
     expect(seat.allows(alias, "session-two")).toBe(false);
     expect(seat.release(alias, person, "session-two")).toBe(false);
     expect(seat.owns(alias, person, "session-one")).toBe(true);
+    expect(await seat.take(alias, person, undefined, "session-one")).toMatchObject({ held: true, owned: true, acquired: false });
     expect(seat.release(alias, person, "session-one")).toBe(true);
     seat.close();
   });

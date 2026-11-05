@@ -15527,6 +15527,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             res.once("close", onClose);
             try {
               const result = await sharedVpsSeat.take(alias, controlLeaseId, cancelled.signal, auth.kind === "session" ? auth.session.id : "loopback");
+              if (cancelled.signal.aborted || res.destroyed) {
+                sharedVpsSeat.release(alias, controlLeaseId, auth.kind === "session" ? auth.session.id : "loopback");
+                return;
+              }
               return json(res, 200, { ...computerControl.snapshot(key), ...result });
             } finally { res.off("close", onClose); }
           }
