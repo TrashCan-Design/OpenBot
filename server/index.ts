@@ -212,7 +212,8 @@ import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts";
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
 import { applyChannelUpdate } from "./channel-update.ts";
-import { describeSharedDesktop, SHARED_FRESH_OBSERVATION, sharedObservationTool, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { describeSharedDesktop, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { SharedVpsJournal } from "./shared-vps-journal.ts"; import { createSharedVpsGateway, executeSharedVpsRpc, drainSharedVpsViewers, recoverSharedVps, sharedVpsPreview } from "./shared-vps-host.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
@@ -1645,6 +1646,7 @@ type InternalCapability = {
   createdRooms?: number;
   openedThreads: number;
   orphanExpiresAt: number;
+  sharedVps?: { alias: string; container: string };
   localVmTarget?: LocalVmTarget;
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
@@ -2517,21 +2519,15 @@ const computerControl = new ComputerControl((key, snapshot) => {
   }
 });
 const controlLeaseIdSchema = z.string().min(16).max(120).regex(/^[A-Za-z0-9_-]+$/);
-const sharedVpsSeat = new SharedVpsSeat(turnResources, computerControl, alias => {
-  for (const candidate of store.bots) {
-    if (candidate.cloudBackend === "vps" && candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === alias) {
-      desktopViewer.closeForTarget(`vps/${candidate.id}`);
-    }
-  }
-  vps.stopDesktopTunnel(sharedVpsOwnerId(alias));
-});
+const sharedVpsSeat = new SharedVpsSeat(turnResources, computerControl, alias => drainSharedVpsViewers(alias, store.bots, bot => vpsSshAliasForBot(cfg, bot), desktopViewer), new SharedVpsJournal(join(DATA_DIR, "shared-vps-operations.json")));
+const sharedVpsGateway = createSharedVpsGateway(sharedVpsSeat);
 function controlIntegration(
   botId: string,
   threadId: string,
   generation: string,
-  machine: "this computer" | { localVmTarget?: LocalVmTarget; boxId?: string | null } = {},
+  machine: "this computer" | { localVmTarget?: LocalVmTarget; boxId?: string | null; sharedVps?: { alias: string; container: string } } = {},
 ) {
-  const { localVmTarget, boxId } = machine === "this computer" ? {} : machine;
+  const { localVmTarget, boxId, sharedVps } = machine === "this computer" ? {} : machine;
   return {
     url: `http://127.0.0.1:${PORT}/api/internal/computer-control?botId=${encodeURIComponent(botId)}`,
     token: mintInternalCapability({
@@ -2540,7 +2536,7 @@ function controlIntegration(
       generation,
       depth: 0,
       kind: "computer",
-      ...(localVmTarget ? { localVmTarget } : {}),
+      ...(sharedVps ? { sharedVps } : {}), ...(localVmTarget ? { localVmTarget } : {}),
       ...(boxId !== undefined ? { boxId } : {}),
       ...(teamComputerTurns.get(threadId) ? { teamComputerId: teamComputerTurns.get(threadId)!.computerId } : {}),
       skillAuthoring: false,
@@ -5693,7 +5689,8 @@ function sharedVpsSnapshot(bot: BotRecord) {
 }
 
 async function computerCallGate(internalCapability: InternalCapability, signal?: AbortSignal, call?: ReturnType<typeof yourComputerCallFrom>, query?: URLSearchParams): Promise<ControlState> {
-  const { botId, threadId, generation } = internalCapability; const askedAt = Date.now(); const sharedOwner = `${threadId}:${generation}`; const sharedBot = store.bot(botId); const sharedAlias = sharedBot?.cloudBackend === "vps" && sharedBot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, sharedBot) : null; if (sharedAlias && query?.get("phase") === "end") { sharedVpsSeat.finish(sharedAlias, sharedOwner); return { held: false, helpOpen: false }; } if (sharedAlias && query?.get("phase") === "seen") { sharedVpsSeat.note(sharedAlias, sharedOwner); return { held: false, helpOpen: false }; } if (sharedAlias && sharedObservationTool(query?.get("tool"))) return { held: false, helpOpen: false };
+  const { botId, threadId, generation } = internalCapability; const askedAt = Date.now();
+  if (query?.has("phase")) return { held: true, helpOpen: false, blockedReason: "Client desktop lifecycle reports are not accepted" };
   const deadline = askedAt + COMPUTER_CALL_WAIT_MS;
   let personHeld = false;
   for (;;) {
@@ -5732,7 +5729,6 @@ async function computerCallGate(internalCapability: InternalCapability, signal?:
         return { held: true, helpOpen, blockedReason: CONTROL_HANDED_BACK };
       } else {
         if (Date.now() - askedAt > COMPUTER_CALL_ACT_WITHIN_MS) return { held: true, helpOpen, blockedReason: CONTROL_WAITED };
-        if (sharedAlias && query?.get("tool")) { const admitted = sharedVpsSeat.admit(sharedAlias, sharedOwner); if (admitted !== "ok") return { held: true, helpOpen: false, blockedReason: admitted === "stale" ? SHARED_FRESH_OBSERVATION : CONTROL_BUSY }; }
         return { held: false, helpOpen };
       }
     }
@@ -5873,9 +5869,9 @@ async function mountBotVps(
   if (!remote?.ready || !remote.sshAlias) return { problem: remote?.problem ?? null, reachable: remote?.daemonUp === true, outdated: vpsDesktopOutdated(remote) };
   const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
   const vpsMcp = vps.vpsComputerMcp(targetCfg, desktopId, remote.container_id ?? undefined, bot.vpsDesktopMode === "shared");
-  const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation);
+  const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation, bot.vpsDesktopMode === "shared" ? { sharedVps: { alias: remote.sshAlias, container: remote.container_id! } } : {});
   // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
-  const vpsCapture = () => vps.vpsComputerScreenshot(targetCfg, desktopId);
+  const vpsCapture = () => bot.vpsDesktopMode === "shared" ? sharedVpsPreview(sharedVpsGateway, { alias: remote.sshAlias!, container: remote.container_id! }, () => sharedVpsSeat.currentOwner(remote.sshAlias!) === `${owner.threadId}:${owner.generation}`) : vps.vpsComputerScreenshot(targetCfg, desktopId);
   autoVmClaims.set(owner.threadId, {
     owner,
     lazy: true,
@@ -13101,7 +13097,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? "phone"
         : path.startsWith("/api/internal/connectors/")
         ? "connectors"
-        : path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
+        : path === "/api/internal/shared-vps/mcp" || path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
           ? "computer"
           : "agents";
       if (internalCapability.kind !== requiredCapabilityKind) {
@@ -14732,6 +14728,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.writeHead(upstream.status, headers);
         return res.end(Buffer.from(withScopeHint(proactive.fence.confines(internalCapability.threadId) ? recordsAnswer(upstream.bytes, upstream.contentType) : upstream.bytes, upstream.contentType, connectorCalls.map((call) => call.slug))));
       }
+      if (method === "POST" && path === "/api/internal/shared-vps/mcp") return json(res, 200, { result: await executeSharedVpsRpc(sharedVpsGateway, internalCapability, await readInternalBody(), () => internalCapabilityIsActive(internalCapability), async () => { const state = await computerCallGate(internalCapability); if (state.held) throw new Error(controlRefusal(state)); }) });
       if (path === "/api/internal/computer-control") {
         const botId = url.searchParams.get("botId") ?? "";
         const bot = store.bot(botId);
@@ -15495,10 +15492,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         } finally { release(); if (m[2] !== "sleep") cloudComputerPower.used(key); }
       }
       if (bot.cloudBackend === "vps") {
-        const sharedAlias = bot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, bot) : null;
+        const sharedAlias = bot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, bot) : null; if (sharedAlias && sharedVpsSeat.recovering(sharedAlias) && !["recover", "screenshot"].includes(m[2]!)) return json(res, 409, { error: "Recover the shared desktop before changing its lifecycle" });
+        if (m[2] === "recover") { if (!sharedAlias) return json(res, 400, { error: "Recovery requires a shared desktop" }); const body = await readBody(req); if (body.confirmStop !== true) return json(res, 400, { error: "Confirm stopping running work before recovery" }); const release = claimBotComputerLifecycle(desktopId); try { await recoverSharedVps(sharedVpsGateway, sharedVpsSeat, cfg, sharedAlias); return json(res, 200, { ok: true }); } finally { release(); } }
         if (m[2] === "screenshot") {
           res.setHeader("cache-control", "private, no-store");
-          return json(res, 200, { ...(await computerPreviews.capture(desktopId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), desktopId))), ...(sharedAlias ? { ...sharedVpsSeat.frame(sharedAlias), capturedAt: Date.now() } : {}) });
+          const status = sharedAlias ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), desktopId) : null;
+          if (sharedAlias && !status?.ready) return json(res, 409, { error: status?.problem ?? "The shared desktop is not ready" });
+          return json(res, 200, sharedAlias && status?.container_id ? { ...(await sharedVpsPreview(sharedVpsGateway, { alias: sharedAlias, container: status.container_id }, () => auth.kind !== "session" || sessions.isLive(auth.session.id))), ...sharedVpsSeat.frame(sharedAlias) } : await computerPreviews.capture(desktopId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), desktopId)));
         }
         if (sharedAlias && m[2] === "remove") return json(res, 409, { error: "Manage the shared VPS desktop from Settings → Computers; removing a bot never removes it" });
         if (sharedAlias && m[2] === "join" && !sharedVpsSeat.allows(sharedAlias, auth.kind === "session" ? auth.session.id : "loopback")) {
@@ -15509,7 +15509,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             store.bots.some(candidate => candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === sharedAlias && activeVpsThreads.has(candidate.id)))) {
           return json(res, 409, { error: "The shared VPS desktop is in use; wait for all bots and the person to release it" });
         }
-        const releaseComputerLifecycle = claimBotComputerLifecycle(sharedAlias && m[2] === "sleep" ? desktopId : botId, m[2] === "join");
+        const releaseComputerLifecycle = claimBotComputerLifecycle(sharedAlias ? desktopId : botId, m[2] === "join");
         // Settles only after the lane is released, so a waiter can claim it.
         let joinSettled: (() => void) | undefined;
         if (m[2] === "join") vpsJoinRequests.set(desktopId, new Promise(resolve => { joinSettled = resolve; }));
@@ -15524,7 +15524,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return json(res, 409, { error: "the VPS computer is being used by this bot — interrupt the turn first" });
           }
           if (m[2] === "join") {
-            const remote = auth.kind !== "loopback";
+            const remote = Boolean(sharedAlias) || auth.kind !== "loopback";
             const result = await vps.vpsComputerJoin(vpsConfigForBot(cfg, bot), desktopId, undefined, remote);
             return json(res, 200, { ...result, joinUrl: remote
               ? desktopViewerUrl(`vps/${botId}`, bot.threadId) : result.joinUrl });
@@ -15730,7 +15730,7 @@ function runtimeHoldsRoot(threadId: string): boolean {
 
 const gracefulShutdown = createGracefulShutdown({
   cleanup: [
-    () => {
+    async () => {
       followupsReady = false;
       companyShutdown = true;
       // Before any provider is torn down, so what the teardown fails stays cut for the next start.
@@ -15742,7 +15742,7 @@ const gracefulShutdown = createGracefulShutdown({
       sharedComputers.close(); deviceLinks.close();
       phones.close();
       sharedComputerControl.close();
-      sharedVpsSeat.close();
+      sharedVpsSeat.close(); await sharedVpsGateway.close();
       browserLive.closeAll();
       desktopViewer.closeAll();
       upgrades.close();

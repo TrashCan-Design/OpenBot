@@ -130,6 +130,7 @@ case "$*" in
       exit 1
     fi
     cat "$FAKE_DOCKER_DIR/image.json" ;;
+  *" exec "*" mcp "*) exec "/usr/bin/env" node "$FAKE_DOCKER_DIR/cua-mcp.mjs" ;;
   *" exec "*"--version"*) echo "cua-driver ${CUA_DRIVER_VERSION}" ;;
   *" exec "*"--screenshot-out-file"*)
     : > "$FAKE_DOCKER_DIR/capture-started"
@@ -208,6 +209,22 @@ const forward = args[args.indexOf('-L') + 1];
 const port = Number(forward.split(':')[1]);
 createServer(socket => socket.end()).listen(port, '127.0.0.1');
 `, { mode: 0o755 });
+    writeFileSync(join(fakeBin, "cua-mcp.mjs"), `
+import { createInterface } from "node:readline";
+import { readFileSync, appendFileSync } from "node:fs";
+for await (const line of createInterface({ input: process.stdin })) {
+  const frame = JSON.parse(line);
+  if (frame.id === undefined) continue;
+  let result = {};
+  if (frame.method === "initialize") result = { protocolVersion: "2024-11-05", capabilities: { tools: {} } };
+  if (frame.method === "tools/list") result = { tools: ["get_desktop_state", "click"].map(name => ({ name, inputSchema: { type: "object", additionalProperties: false } })) };
+  if (frame.method === "tools/call") {
+    appendFileSync(process.env.FAKE_DOCKER_LOG, "cua-tool:" + frame.params.name + "\\n");
+    result = frame.params.name === "get_desktop_state" ? { content: [{ type: "image", mimeType: "image/png", data: readFileSync(process.env.FAKE_DOCKER_DIR + "/screenshot.b64", "utf8").trim() }] } : { content: [] };
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }) + "\\n");
+}
+`);
     writeFileSync(join(fakeBin, "image.json"), imageInspectJson());
     writeFileSync(join(fakeBin, "container.json.tpl"), containerInspectTemplate());
     const png = Buffer.concat([
@@ -362,11 +379,16 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
       const gateUrl = computer.env.find((entry: { name: string }) => entry.name === "OMB_CONTROL_URL").value as string;
       const gateToken = computer.env.find((entry: { name: string }) => entry.name === "OMB_CONTROL_TOKEN").value as string;
       const gate = (query: string) => fetch(`${gateUrl}&${query}`, { headers: { authorization: `Bearer ${gateToken}` } }).then((response) => response.json());
-      expect(await gate("tool=click")).toMatchObject({ held: true, blockedReason: expect.stringContaining("fresh get_desktop_state") });
-      expect(await gate("tool=get_desktop_state")).toMatchObject({ held: false, helpOpen: false });
-      expect(await gate("phase=seen")).toMatchObject({ held: false, helpOpen: false });
-      expect(await gate("tool=click")).toMatchObject({ held: false, helpOpen: false });
-      expect(await gate("phase=end")).toMatchObject({ held: false, helpOpen: false });
+      const rpc = async (name: string) => {
+        const response = await fetch(gateUrl.replace("/computer-control", "/shared-vps/mcp"), { method: "POST", headers: { authorization: `Bearer ${gateToken}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }) });
+        expect(response.status).toBe(200); return (await response.json() as { result: unknown }).result;
+      };
+      expect(await rpc("click")).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("fresh get_desktop_state") }] });
+      expect(await gate("phase=seen")).toMatchObject({ held: true, blockedReason: expect.stringContaining("not accepted") });
+      expect(await rpc("click")).toHaveProperty("isError", true);
+      expect(await rpc("get_desktop_state")).toHaveProperty("content");
+      expect(await rpc("click")).toEqual({ content: [] });
+      expect(await gate("phase=end")).toMatchObject({ held: true, blockedReason: expect.stringContaining("not accepted") });
       await api("POST", `/api/bots/${beta.id}/messages`, { threadId: second.threadId, text: "Work, then use the shared desktop" });
       await until(async () => existsSync(`${askerDump}.mcp.json`), "the second shared bot mount");
       const secondControl = control(askerDump);

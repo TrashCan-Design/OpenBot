@@ -1,6 +1,6 @@
 import "../testing/scrub-ambient-omb-env.ts";
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, symlinkSync, readlinkSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -31,6 +31,7 @@ beforeAll(async () => {
         ? send(200, { token: "omb_sess_secret_token_value", session: { id: "s1", label: body.label, scopes: ["admin", "client"], expiresAt: Date.UTC(2026, 11, 1) } })
         : send(401, { error: "invalid or expired pairing code" });
     }
+    if (req.method === "POST" && req.url === "/api/auth/logout" && req.headers.authorization === "Bearer omb_sess_secret_token_value") return send(200, { ok: true });
     send(404, {});
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
@@ -49,6 +50,12 @@ const capture = () => {
 };
 
 describe("connect", () => {
+  it.skipIf(process.platform === "win32")("refuses a planted dangling symlink without replacing it", () => {
+    const file = join(dir, "dangling-token");
+    symlinkSync(join(dir, "absent-target"), file);
+    expect(() => writeTokenFile(file, "new-secret", false)).toThrow();
+    expect(readlinkSync(file)).toBe(join(dir, "absent-target"));
+  });
   it("mints a code on this computer's own server, saves the token to a private file, and never prints it", async () => {
     const file = join(dir, "token");
     const { io, out, err } = capture();
@@ -103,5 +110,11 @@ describe("connect", () => {
     expect(windowsTokenAcl("C:\\Users\\ada\\token", "ada")).toEqual({
       command: "icacls", args: ["C:\\Users\\ada\\token", "/inheritance:r", "/grant:r", "ada:(R,W)"],
     });
+  });
+  it("revokes the paired session when its credential cannot be saved", async () => {
+    const { io, out, err } = capture();
+    expect(await runHeadless(["connect", origin, "--code", "ABCD1234", "--out", join(dir, "absent-folder", "token")], { io, env: {} })).not.toBe(0);
+    expect(requests.at(-1)?.path).toBe("/api/auth/logout");
+    expect(JSON.stringify([out, err])).not.toContain("omb_sess_secret_token_value");
   });
 });

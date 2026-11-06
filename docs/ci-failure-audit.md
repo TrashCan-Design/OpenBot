@@ -162,3 +162,81 @@ This pass did not download every shard log again. The split above matches the ea
 ## Observation pass — 7 November 2026 (Asia/Kolkata)
 
 No new shard run was collected after `2b3e8d8e8d`. Run 42255385008 remains the last full CI result and stays red for the reasons above. Local Linux tests for the shared-seat, conversation-opening, chat MCP, bridge, and VPS routing files were run for the observation change. They do not replace that shard run and they are not a GCP or Windows desktop check.
+
+## Safety follow-up: latest completed CI — 7 November 2026 (Asia/Kolkata)
+
+Run [42280742460](https://github.com/TrashCan-Design/OpenBot/actions/runs/42280742460)
+is for PR head `375aff47f7674bb6e4ef0a82875bf08cc60b5aa9`. It supersedes the earlier
+42255385008 observation note above. The GitHub job listing exposes only its first
+30 jobs: 15 Vitest shard logs were retrieved (seven Ubuntu, eight Windows).
+Ubuntu shard 2 is outside that page and was not inspected. Do not turn these
+partial counts into an asserted full-matrix total.
+
+| Retrieved shard | Failed tests |
+| --- | ---: |
+| ubuntu-latest, shard 1/8 | 3 |
+| ubuntu-latest, shard 3/8 | 29 |
+| ubuntu-latest, shard 4/8 | 42 |
+| ubuntu-latest, shard 5/8 | 42 |
+| ubuntu-latest, shard 6/8 | 7 |
+| ubuntu-latest, shard 7/8 | 44 |
+| ubuntu-latest, shard 8/8 | 12 |
+| windows-latest, shard 1/8 | 44 |
+| windows-latest, shard 2/8 | 8 |
+| windows-latest, shard 3/8 | 35 |
+| windows-latest, shard 4/8 | 36 |
+| windows-latest, shard 5/8 | 11 |
+| windows-latest, shard 6/8 | 3 |
+| windows-latest, shard 7/8 | 12 |
+| windows-latest, shard 8/8 | 3 |
+
+Retrieved totals are 179 Ubuntu failures and 152 Windows failures, counting test
+failures rather than independent root causes. Build/lint/types, package smokes,
+Windows CUA host smoke and behavior evaluations passed on that older commit.
+The Ubuntu browser S4 job failed its 2x viewport resize case: it still saw
+`[1280,1457,2]` after 15 seconds. Its subsequent alternate run passed 100 tests
+with that case skipped; that is not a successful retest of the failed case.
+
+Classification from the retrieved failure blocks:
+
+- Retired Boat/hosted paths: boat-* suites, cloud/team provisioning, hosted
+  desktop and surface-selection fixtures still expect the disabled provider to
+  answer. These need tests of refusal or a migration to retained self-hosted
+  fixtures. Restoring vendor access is not an acceptable fix.
+- Stale product/selection expectations: old Documents/MausBot and welcome text,
+  removed Cloud settings/Places choices, old download URLs, the retired key/tool
+  catalog entries and opt-in analytics expectations. Reproduce before changing
+  assertions; a retained behavior must not be dismissed merely by its filename.
+- Test setup: LocalComputerSection reports `window is not defined`. The Windows
+  bridge runner imported a drive-letter path as an ESM URL; this change uses
+  `pathToFileURL` and removes obsolete client lifecycle-report expectations.
+  Its Windows result still needs the next CI run.
+- Retained behavior requiring separate diagnosis: index concurrent writes,
+  phone-secret verification, stream viewport resizing, app-loading state,
+  ChatMarkdown thread links, extractor/helper provenance, routine scheduling,
+  dev reports and remaining end-to-end timeouts. These are unresolved, not
+  certified safe and not automatically attributed to shared-desktop changes.
+
+Local wider regression results in this follow-up are also retained: the initial
+nine-file run had 359 passed and 15 failed. Eleven were Chat MCP startup/cleanup
+or timing expectations in an environment that cannot confirm production process
+cleanup; four were ACP/Qwen restart cases. A separate shared-process run failed
+four Stop/close cases. Those exact four also fail on unchanged PR base
+`375aff4` (42.36 s, four failed), establishing that they were not introduced by
+the folder-isolation change. The three targeted folder/pooling/admission cases
+pass. The four Qwen failures have not individually been reproduced on base and
+remain unresolved; do not label them all as a proven environment baseline.
+
+Protocol-only Chat MCP fixtures now use a close-confirmed adapter for explicitly
+known leaf processes, as the existing reconnect fixtures do. Three real-tree
+checks skip only after a disposable exited-process probe fails; the production
+cleanup implementation is unchanged. The final Chat MCP run passes 82 and skips
+three. An explicit negative-verdict test still verifies that uncertain cleanup
+stays an error after pending responses have been cleared.
+
+The focused safety/CI/documentation/size checks pass 164/164. Lifecycle/viewer
+fixtures separately pass 81/81. These overlap and must not be added together.
+The server bundle and isolated packaged-server smoke pass. No real GCP, Windows
+desktop or EXE verification was performed. A first parallel build attempt was
+killed with exit 137; memory-heavy type/build checks were rerun sequentially.
+Fresh CI on the published fix commit is required before any merge decision.

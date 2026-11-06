@@ -9,6 +9,19 @@ const resource = sharedVpsResource(alias);
 const person = "a".repeat(20);
 
 describe("shared VPS desktop ownership", () => {
+  it("a late viewer-close result cannot release a new person after recovery", async () => {
+    let drained!: () => void;
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl(), () => new Promise<void>(resolve => { drained = resolve; }));
+    await seat.take(alias, person);
+    seat.release(alias, person);
+    await seat.recover(alias, async () => {});
+    await seat.take(alias, "new-person-lease");
+    drained(); await Promise.resolve();
+    expect(seat.owns(alias, "new-person-lease")).toBe(true);
+    seat.close();
+  });
+
   it("uses one stable per-host container for multiple bots and preserves per-bot names", () => {
     const alpha = { id: "alpha", vpsDesktopMode: "shared" as const };
     const beta = { id: "beta", vpsDesktopMode: "shared" as const };
@@ -60,7 +73,7 @@ describe("shared VPS desktop ownership", () => {
     vi.useFakeTimers();
     const resources = new TurnResources();
     const released: string[] = [];
-    const seat = new SharedVpsSeat(resources, new ComputerControl(), value => released.push(value));
+    const seat = new SharedVpsSeat(resources, new ComputerControl(), value => { released.push(value); });
     try {
       await seat.take(alias, person);
       expect(seat.owns(alias, person)).toBe(true);
@@ -211,7 +224,7 @@ describe("shared VPS desktop ownership", () => {
     expect(seat.frame(alias)).toEqual({ epoch, inputPermitted: false, recovering: false, controller: "person" });
     expect(resources.waiting(resource)).toHaveLength(0);
     expect(seat.owns(alias, person, "session-one")).toBe(true);
-    expect(seat.admit(alias, "observer:turn")).toBe("recovering");
+    expect(seat.admit(alias, "observer:turn", "operation")).toBe("recovering");
     expect(seat.frame(alias).recovering).toBe(false);
     expect(seat.owns(alias, person, "session-one")).toBe(true);
     seat.close();
@@ -224,16 +237,16 @@ describe("shared VPS desktop ownership", () => {
     const second = { threadId: "beta", generation: "two" };
     resources.claim(resource, first);
     seat.note(alias, "alpha:one");
-    expect(seat.admit(alias, "beta:two")).toBe("recovering");
-    expect(seat.admit(alias, "alpha:one")).toBe("ok");
-    seat.finish(alias, "alpha:one");
+    expect(seat.admit(alias, "beta:two", "operation")).toBe("recovering");
+    expect(seat.admit(alias, "alpha:one", "operation")).toBe("ok");
+    seat.finish(alias, "alpha:one", "operation");
     resources.release(first);
     resources.claim(resource, second);
-    expect(seat.admit(alias, "alpha:one")).toBe("recovering");
-    expect(seat.admit(alias, "beta:two")).toBe("stale");
+    expect(seat.admit(alias, "alpha:one", "operation")).toBe("recovering");
+    expect(seat.admit(alias, "beta:two", "operation")).toBe("stale");
     seat.note(alias, "beta:two");
-    expect(seat.admit(alias, "beta:two")).toBe("ok");
-    seat.finish(alias, "beta:two");
+    expect(seat.admit(alias, "beta:two", "operation")).toBe("ok");
+    seat.finish(alias, "beta:two", "operation");
     resources.release(second);
     seat.close();
   });
@@ -244,7 +257,7 @@ describe("shared VPS desktop ownership", () => {
     const alpha = { threadId: "alpha", generation: "one" };
     resources.claim(resource, alpha);
     seat.note(alias, "alpha:one");
-    expect(seat.admit(alias, "alpha:one")).toBe("ok");
+    expect(seat.admit(alias, "alpha:one", "operation")).toBe("ok");
     let settled = false;
     const next = seat.take(alias, person).then((result) => { settled = true; return result; });
     resources.release(alpha);
@@ -252,10 +265,10 @@ describe("shared VPS desktop ownership", () => {
     expect(settled).toBe(false);
     expect(seat.recovering(alias)).toBe(true);
     expect(resources.holder(resource)?.threadId).toBe(`shared-vps-recovery:${alias}`);
-    expect(seat.finish(alias, "other:turn")).toBeUndefined();
+    expect(seat.finish(alias, "other:turn", "operation")).toBeUndefined();
     expect(seat.recovering(alias)).toBe(true);
     expect(settled).toBe(false);
-    seat.finish(alias, "alpha:one");
+    seat.finish(alias, "alpha:one", "operation");
     await expect(next).resolves.toMatchObject({ held: true, owned: true });
     expect(seat.recovering(alias)).toBe(false);
     seat.close();

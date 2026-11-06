@@ -33,7 +33,7 @@ export function desktopViewerUrl(target: string, threadId?: string): string {
   return `/desktop-viewer#${params}`;
 }
 
-interface Viewer { socket: Socket; close: () => void; owner?: string; botId?: string; targetId?: string }
+interface Viewer { socket: Socket; closed?: Promise<void>; close: () => void; owner?: string; botId?: string; targetId?: string }
 
 export function createDesktopViewer(deps: {
   target: (id: string) => DesktopTarget | undefined;
@@ -88,7 +88,8 @@ export function createDesktopViewer(deps: {
       if (auth.kind === "session") viewer.owner = auth.session.id;
       if (botId !== null) viewer.botId = botId;
       viewers.set(req, viewer);
-      pending.socket.once("close", () => viewers.delete(req));
+      viewer.closed = new Promise(resolve => pending.socket.once("close", resolve));
+      pending.socket.once("close", () => { void viewer.closed!.then(() => viewers.delete(req)); });
       upgrade = viewer;
     }
     let connection: DesktopConnection;
@@ -153,6 +154,7 @@ export function createDesktopViewer(deps: {
       }
       clearTimeout(timeout);
       peer = remote;
+      upgrade.closed = Promise.all([upgrade.closed, new Promise<void>(resolve => remote.once("close", resolve))]).then(() => {});
       remote.once("error", upgrade.close);
       remote.once("close", upgrade.close);
       pending.release();
@@ -185,6 +187,18 @@ export function createDesktopViewer(deps: {
         closed++;
       }
       return closed;
+    },
+    drainForTarget: async (id: string): Promise<void> => {
+      const pending = [...viewers.values()].filter(viewer => viewer.targetId === id);
+      await Promise.all(pending.map(async viewer => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          viewer.close();
+          await Promise.race([viewer.closed, new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("Viewer disconnect was not confirmed")), 5_000);
+          })]);
+        } finally { clearTimeout(timer); }
+      }));
     },
     closeForTarget: (id: string) => {
       for (const viewer of viewers.values()) if (viewer.targetId === id) viewer.close();

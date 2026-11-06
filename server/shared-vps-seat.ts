@@ -1,3 +1,5 @@
+import { SharedVpsJournal } from "./shared-vps-journal.ts";
+import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { ComputerControl } from "./computer-control.ts";
 import { sharedAliasFromResource, sharedVpsControlKey, sharedVpsResource } from "./shared-vps.ts";
@@ -6,26 +8,29 @@ import { TurnResources, type TurnOwner } from "./turn-resources.ts";
 const TAKE_TIMEOUT_MS = 120_000;
 const LEASE_IDLE_MS = 10 * 60_000;
 
-type Seat = { owner: TurnOwner; session: string; confirmed: boolean; timer: ReturnType<typeof setTimeout> };
+type Seat = { operationId: string; owner: TurnOwner; session: string; confirmed: boolean; timer: ReturnType<typeof setTimeout> };
 
 /** Shared VPS person control participates in the same FIFO desktop queue as bot turns. */
 export class SharedVpsSeat {
   private readonly seats = new Map<string, Seat>();
   private readonly waitRequests = new Map<string, number>();
   private readonly responses = new Map<string, number>();
-  private readonly inflightOwners = new Map<string, string[]>();
+  private readonly journal: SharedVpsJournal;
   private readonly draining = new Set<string>();
   private readonly epoch = new Map<string, number>();
   private readonly seen = new Map<string, { epoch: number; owner: string }>();
   private readonly resources: TurnResources;
   private readonly control: ComputerControl;
-  private readonly onRelease: (alias: string) => void;
+  private readonly onRelease: (alias: string) => void | Promise<void>;
 
-  constructor(resources: TurnResources, control: ComputerControl, onRelease: (alias: string) => void = () => {}) {
+  constructor(resources: TurnResources, control: ComputerControl, onRelease: (alias: string) => void | Promise<void> = () => {}, journal = new SharedVpsJournal()) {
+    this.journal = journal;
     this.resources = resources;
     this.control = control;
     this.onRelease = onRelease;
     resources.onRelease((resource, owner) => this.afterResourceRelease(resource, owner));
+    resources.onClaim((resource) => { const alias = sharedAliasFromResource(resource); if (alias) this.advance(alias); });
+    for (const row of journal.list()) { this.draining.add(row.alias); resources.hold(sharedVpsResource(row.alias), this.recoveryOwner(row.alias)); }
   }
 
   private owner(alias: string, lease: string, session: string): TurnOwner {
@@ -91,9 +96,12 @@ export class SharedVpsSeat {
             this.resources.releaseOne(resource, owner);
             releaseClaim = false;
           } else {
+            const operationId = randomUUID();
+            try { this.journal.add({ id: operationId, alias, owner: `${owner.threadId}:${owner.generation}`, target: "" }); }
+            catch (error) { this.control.releaseLease(sharedVpsControlKey(alias), lease); throw error; }
             const timer = setTimeout(() => this.release(alias, lease), LEASE_IDLE_MS);
             timer.unref?.();
-            this.seats.set(alias, { owner, session, confirmed: !provisional, timer });
+            this.seats.set(alias, { operationId, owner, session, confirmed: !provisional, timer });
             releaseClaim = false;
             return { held: true, owned: true, acquired: acquired.acquired };
           }
@@ -147,7 +155,7 @@ export class SharedVpsSeat {
     }
     if (action === "check" && lease) {
       this.touch(alias, lease, session);
-      return { status: 200, body: { ...this.control.snapshot(key), owned: this.owns(alias, lease, session) } };
+      return { status: 200, body: { ...this.control.snapshot(key), owned: this.owns(alias, lease, session), queuePosition: this.resources.waitPosition(sharedVpsResource(alias), this.owner(alias, lease, session)) ?? null } };
     }
     return { status: 400, body: { error: "action must be take, release, or check" } };
   }
@@ -167,47 +175,59 @@ export class SharedVpsSeat {
   release(alias: string, lease?: string, session?: string): boolean {
     const seat = this.seats.get(alias);
     if (!seat || (lease && seat.owner.generation !== lease) || (session && seat.session !== session)) return false;
+    if (this.draining.has(alias)) return true;
     this.draining.add(alias);
     clearTimeout(seat.timer);
     this.control.releaseLease(sharedVpsControlKey(alias), seat.owner.generation);
-    if (this.pending(alias) === 0) this.finishDrain(alias);
+    const finish = () => {
+      if (this.seats.get(alias) !== seat || !this.journal.finish(seat.operationId, alias, `${seat.owner.threadId}:${seat.owner.generation}`)) return;
+      if (this.pending(alias) === 0) this.finishDrain(alias);
+    };
+    const closing = this.onRelease(alias);
+    if (closing && typeof closing.then === "function") void closing.then(finish).catch(() => {});
+    else finish();
     return true;
   }
 
   /** A mutation was allowed onto the desktop. finish must name the same owner once that call's result is known. */
-  admit(alias: string, owner: string): "ok" | "recovering" | "stale" {
-    const holder = this.resources.holder(sharedVpsResource(alias));
-    const heldByCaller = Boolean(holder && `${holder.threadId}:${holder.generation}` === owner);
-    if (this.draining.has(alias) || this.recovering(alias) || !heldByCaller) return "recovering";
+  admit(alias: string, owner: string, id: string, target = ""): "ok" | "recovering" | "stale" {
+    if (this.recovering(alias) || this.currentOwner(alias) !== owner) return "recovering";
     const seen = this.seen.get(alias);
-    if (!seen || seen.epoch !== (this.epoch.get(alias) ?? 0) || seen.owner !== owner) return "stale";
-    const owners = this.inflightOwners.get(alias) ?? [];
-    owners.push(owner);
-    this.inflightOwners.set(alias, owners);
-    return "ok";
+    if (!seen || seen.epoch !== this.version(alias) || seen.owner !== owner) return "stale";
+    return this.journal.add({ id, alias, owner, target }) ? "ok" : "recovering";
   }
 
-  /** Records a successful get_desktop_state for this owner. It does not take, queue, or renew control. */
-  note(alias: string, owner: string): void {
-    this.seen.set(alias, { epoch: this.epoch.get(alias) ?? 0, owner });
+  currentOwner(alias: string): string | null {
+    const holder = this.resources.holder(sharedVpsResource(alias));
+    return holder ? `${holder.threadId}:${holder.generation}` : null;
   }
 
-  finish(alias: string, owner: string): void {
-    const owners = this.inflightOwners.get(alias) ?? [];
-    const index = owners.indexOf(owner);
-    if (index < 0) return;
-    owners.splice(index, 1);
-    if (owners.length) this.inflightOwners.set(alias, owners);
-    else this.inflightOwners.delete(alias);
-    if (owners.length) return;
+  version(alias: string): number { return this.epoch.get(alias) ?? 0; }
+
+  note(alias: string, owner: string, epoch = this.version(alias)): void {
+    if (epoch === this.version(alias) && this.currentOwner(alias) === owner && !this.recovering(alias)) this.seen.set(alias, { epoch, owner });
+  }
+
+  finish(alias: string, owner: string, id: string): void {
+    if (!this.journal.finish(id, alias, owner) || this.pending(alias)) return;
     const recovery = this.recoveryOwner(alias);
     if (this.resources.owns(sharedVpsResource(alias), recovery)) {
       this.draining.delete(alias);
       this.resources.releaseOne(sharedVpsResource(alias), recovery);
       this.advance(alias);
-      return;
-    }
-    if (this.draining.has(alias)) this.finishDrain(alias);
+    } else if (this.draining.has(alias)) this.finishDrain(alias);
+  }
+
+  unresolved(alias: string) { return this.journal.list(alias); }
+  block(alias: string): void { this.draining.add(alias); }
+
+  async recover(alias: string, stop: () => Promise<void>): Promise<void> {
+    if (!this.recovering(alias)) throw new Error("The desktop is not awaiting recovery");
+    const target = this.journal.list(alias).find(row => row.target)?.target ?? "";
+    this.journal.add({ id: `recover:${alias}`, alias, owner: "recovery", target });
+    await stop();
+    for (const row of this.journal.list(alias)) this.finish(alias, row.owner, row.id);
+    if (!this.pending(alias)) { this.draining.delete(alias); this.finishDrain(alias); }
   }
 
   releaseSession(sessionId: string): void {
@@ -235,7 +255,7 @@ export class SharedVpsSeat {
   }
 
   private pending(alias: string): number {
-    return this.inflightOwners.get(alias)?.length ?? 0;
+    return this.journal.list(alias).length;
   }
 
   private recoveryOwner(alias: string): TurnOwner {
@@ -266,7 +286,6 @@ export class SharedVpsSeat {
     this.draining.delete(alias);
     if (seat) this.resources.releaseOne(sharedVpsResource(alias), seat.owner);
     else this.advance(alias);
-    this.onRelease(alias);
   }
 
   close(): void {

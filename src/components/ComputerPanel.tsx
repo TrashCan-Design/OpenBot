@@ -126,7 +126,7 @@ const computerControlSnapshotSchema = z.object({
   held: z.boolean().optional().default(false),
   helpReason: z.string().nullable().optional().default(null),
   help: z.unknown().optional().transform(parseComputerHelp),
-  owned: z.boolean().optional(),
+  owned: z.boolean().optional(), queuePosition: z.number().int().positive().nullable().optional(),
 }).passthrough();
 
 export function ComputerPanel({
@@ -645,10 +645,10 @@ export function ComputerPanel({
   }, [phase, threadPath, profileBot.busy, livePlace]);
 
   const control = state.computerControl[bot.id] ?? { held: false, helpReason: null };
-  const requestControl = useCallback(async (action: ComputerControlAction, controlLeaseId?: string) => {
+  const requestControl = useCallback(async (action: ComputerControlAction | "check", controlLeaseId?: string, signal?: AbortSignal) => {
     const snap = computerControlSnapshotSchema.parse(await api(`/api/bots/${bot.id}/computer/control`, {
       method: "POST",
-      body: JSON.stringify({ action, ...(controlLeaseId ? { controlLeaseId } : {}) }),
+      body: JSON.stringify({ action, ...(controlLeaseId ? { controlLeaseId } : {}) }), signal,
     }));
     dispatch({
       type: "computerControl",
@@ -663,7 +663,7 @@ export function ComputerPanel({
     : phase === "vm" && vmStatus?.viewer_url && vmStatus.target_key ? viewerTargetId({ key: vmStatus.target_key })
       : cloudPreviewReady && cloudBackend === "vps" ? `vps/${bot.id}` : null;
   const takeover = useComputerTakeover({
-    botId: bot.id, session: `${viewerConnectionKey}:${panelView}`, held: control.held, request: requestControl,
+    botId: bot.id, session: `${viewerConnectionKey}:${panelView}`, held: control.held, request: requestControl, shared: bot.vpsDesktopMode === "shared" && cloudBackend === "vps", check: id => requestControl("check", id),
     viewerClose: liveTarget?.startsWith("vps/") ? threadPath("computer/viewer-close") : null,
   });
   const liveHere = takeover.here && Boolean(liveTarget);
@@ -1320,7 +1320,7 @@ export function ComputerPanel({
             )}
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && !liveHere && <span className="text-[11px]">{t("computer.badge.vps")}</span>}
         </div>
-        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} botId={bot.id} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} onSnapshot={(snap) => dispatch({ type: "computerControl", botId: bot.id, held: snap.held, helpReason: snap.helpReason, help: snap.help ?? null })} />
+        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} botId={bot.id} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} control={{ owned: takeover.here, pending: takeover.waiting, position: takeover.queuePosition, take: () => void takeControl(), release: () => void handBack(), cancel: takeover.leave }} />
         <div className={cn("relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card", liveHere && "ring-2 ring-accent")}>
           {liveHere && liveTarget ? (
             <Suspense fallback={<Loader2 size={18} className="animate-spin text-ink-secondary" />}>

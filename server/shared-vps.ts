@@ -62,7 +62,7 @@ export function describeSharedDesktop(input: {
     recovering: input.recovering === true || recovery,
     controller: input.personControls ? "person" as const : active ? "bot" as const : null,
     waitingQueue: input.waiting.map(owner => {
-      if (owner.threadId.startsWith("shared-vps-person:")) return { id: "person", name: "You" };
+      if (owner.threadId.startsWith("shared-vps-person:")) return { id: "person", name: "Person" };
       const bot = input.botFor(owner);
       return { id: bot?.id ?? owner.threadId, name: bot?.name ?? "Bot" };
     }),

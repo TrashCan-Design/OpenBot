@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { CONTROL_REFUSAL_PLAIN, CONTROL_UNCONFIRMED, CONTROL_WAITED, type ControlState } from "./control-client.ts";
@@ -462,8 +463,8 @@ describe("createReplyQueue", () => {
   });
 });
 
-describe("runMcpBridge control reports", () => {
-  it("reports a successful observation and the end of a mutation on the production bridge", async () => {
+describe("runMcpBridge control gating", () => {
+  it("gates per-bot calls without accepting authority to acknowledge shared actions", async () => {
     const hits: string[] = [];
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -492,7 +493,7 @@ process.stdin.on("data", (chunk) => {
   }
 });
 `);
-    writeFileSync(runner, `import { runMcpBridge } from ${JSON.stringify(join(process.cwd(), "server/mcp-bridge.ts"))};
+    writeFileSync(runner, `import { runMcpBridge } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "server/mcp-bridge.ts")).href)};
 runMcpBridge({
   command: process.execPath,
   args: ["--experimental-strip-types", ${JSON.stringify(driver)}],
@@ -516,12 +517,9 @@ runMcpBridge({
       call("click", { fail: true });
       await vi.waitFor(() => {
         expect(hits).toContain("get_desktop_state:");
-        expect(hits).toContain(":seen");
         expect(hits).toContain("click:");
-        expect(hits).toContain(":end");
       }, { timeout: 10_000 });
-      expect(hits.filter((hit) => hit === ":seen")).toHaveLength(1);
-      expect(hits.filter((hit) => hit === ":end")).toHaveLength(1);
+      expect(hits.some(hit => hit === ":seen" || hit === ":end")).toBe(false);
     } catch (error) {
       throw new Error(`${error instanceof Error ? error.message : error}\n${Buffer.concat(stderr).toString()}`);
     } finally {

@@ -28,3 +28,24 @@ The engine startup cache change (`3a2d563`) depends on upstream performance
 refactors not present here. Larger Ollama context, Responses API, and local-model
 tool-call changes (`9022b06`, `5bfb0f0`, `6371611`) require separate integration
 and regression work; they were not included in this scoped bug-fix pass.
+
+## Shared-desktop safety follow-up — 7 November 2026 (Asia/Kolkata)
+
+Checked official upstream `07d5e152a90ac8c21cb8fe79001cca43f2e8748d` against
+PR #7 head `375aff47f7674bb6e4ef0a82875bf08cc60b5aa9` before this follow-up.
+Adapted `469583b47b13ef2c73ed15273d85ca49cc081d7e`: OpenCode's process pool
+must not share a working folder between different threads, even after an old
+session closes, because the native process retains that folder's MCP registration.
+Other folders and repeated turns of the same thread keep their existing pooling.
+
+Adapted only the strict schema compatibility portion of `f6af8a06`: schemas
+without `$schema` may use 2020-12 keywords; compilation tries strict draft-07,
+then strict 2020-12. Unsupported constraints/references still refuse that tool.
+A tool with an unsupported schema no longer removes its valid neighbors. The
+existing 128-tool limit, per-turn selection and approval checks remain in place.
+No large-catalog or lenient-validation feature was ported.
+
+The latest Boat-start changes do not apply to the removed provider. No vendor
+Admin, hosted cloud-home deployment, relay, or billing path was restored. The
+selected optional features listed in `selected-upstream-work.md` remain pending;
+this follow-up does not authorize or implement them.

@@ -1,7 +1,7 @@
 // The token is written to a file only you can read and never printed: pass the file to other verbs with --token-file.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fchmodSync, fstatSync, openSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, openSync, unlinkSync, writeSync } from "node:fs";
 import { userInfo } from "node:os";
 import { isatty } from "node:tty";
 
@@ -49,9 +49,11 @@ export function writeTokenFile(path: string, token: string, force: boolean, remo
     if (isatty(fd) || fstatSync(fd).isCharacterDevice()) throw usageError("the token goes to a file, never to the terminal", "pass --out FILE");
     restrictTokenFile(tmp, fd);
     writeSync(fd, `${token}\n`);
+    fsyncSync(fd);
     closeSync(fd);
     fd = null;
-    renameWithRetry(tmp, path);
+    if (force) renameWithRetry(tmp, path);
+    else { linkSync(tmp, path); unlinkSync(tmp); }
   } catch (error) {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* report the error that stopped the write */ }
@@ -69,6 +71,7 @@ export function writeTokenFile(path: string, token: string, force: boolean, remo
 export async function connectVerb(ctx: VerbContext): Promise<VerbOutcome> {
   const out = flag(ctx.flags, "out")?.trim();
   if (!out) throw usageError("--out FILE is required: where to keep the token");
+  if (existsSync(out) && ctx.flags.force !== true) throw usageError(`${out} already exists`, "pass --force to replace it");
   const mcp = await loadMcp();
   const named = ctx.positionals[0]?.trim() ? { url: ctx.positionals[0]!.trim() } : namedServer(ctx.flags, ctx.env) ?? { port: "8799" };
   let origin: string;
@@ -95,7 +98,13 @@ export async function connectVerb(ctx: VerbContext): Promise<VerbOutcome> {
   if (paired.status !== 200 || typeof paired.body.token !== "string") {
     throw new HeadlessError(`the code was not accepted${paired.body.error ? `: ${paired.body.error}` : ""}`, EXIT.unreachable, "codes are single use and expire (after five minutes, unless made with openmausbot pair --ttl): get a new one");
   }
-  writeTokenFile(out, paired.body.token, ctx.flags.force === true);
+  try { writeTokenFile(out, paired.body.token, ctx.flags.force === true); }
+  catch (error) {
+    const id = paired.body.session?.id;
+    const revoked = await call(origin, "/api/auth/logout", { method: "POST", body: "{}", headers: { authorization: `Bearer ${paired.body.token}` } }).then(result => result.status === 200).catch(() => false);
+    if (!revoked) throw new HeadlessError(`could not save the credential; session ${id ?? "unknown"} may still be active`, EXIT.failed, "revoke that session from Settings");
+    throw error;
+  }
   const session = paired.body.session ?? {};
   const environment = paired.body.environment ?? described.body;
   const scope = Array.isArray(session.scopes) && session.scopes.includes("admin") ? "admin" : "client";
