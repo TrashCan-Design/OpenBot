@@ -161,9 +161,9 @@ export async function runVerb(ctx: VerbContext): Promise<VerbOutcome> {
   const task = flag(ctx.flags, "task")?.trim() || (flag(ctx.flags, "thread") ? undefined : "new");
   const target = await resolveTarget({ ...ctx, flags: { ...ctx.flags, task: undefined } }, named ? undefined : first);
   const client = await ctx.client();
-  const threadId = target.taskId ?? await conversationFor(client, target, task!, conversationTitle(ctx, text));
-  const since = Number((await readJob(client, threadId)).now);
   const sendId = flag(ctx.flags, "send-id") ?? newSendId();
+  const threadId = target.taskId ?? await conversationFor(client, target, task!, conversationTitle(ctx, text), task === "new" ? sendId : undefined);
+  const since = Number((await readJob(client, threadId)).now);
   const tool = target.type === "bot" ? "send_bot_message" : "send_channel_message";
   const args = { [`${target.type}_id`]: target.id, task_id: threadId, text, send_id: sendId };
   let sent: Rec | undefined;

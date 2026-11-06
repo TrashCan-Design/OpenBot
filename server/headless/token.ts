@@ -37,7 +37,17 @@ async function create(ctx: VerbContext): Promise<VerbOutcome> {
     if (typeof session.id === "string") await client.json(`/api/auth/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" }).catch(() => undefined);
     throw new HeadlessError("this OpenBot server cannot make access tokens", EXIT.unreachable, "update OpenBot on the server, or use openmausbot connect");
   }
-  writeTokenFile(out, paired.token, ctx.flags.force === true);
+  try {
+    writeTokenFile(out, paired.token, ctx.flags.force === true);
+  } catch (error) {
+    const revoked = typeof session.id === "string"
+      ? await client.json(`/api/auth/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" }).then(() => true, () => false)
+      : false;
+    if (!revoked) {
+      throw new HeadlessError(`could not save the token, and session ${session.id ?? "unknown"} is still active`, EXIT.failed, "revoke it with openmausbot token revoke once the server lists it");
+    }
+    throw error instanceof HeadlessError ? error : new HeadlessError(error instanceof Error ? error.message : "could not save the token", EXIT.failed);
+  }
   return {
     result: { ok: true, tokenFile: out, url: client.baseUrl, token: { id: session.id, name: session.label, scope, expiresAt: session.expiresAt } },
     exitCode: EXIT.done,

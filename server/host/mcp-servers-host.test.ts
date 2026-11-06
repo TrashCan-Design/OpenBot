@@ -158,6 +158,7 @@ it("one restart check runs while an earlier check of that server is still starti
   expect(starts).toBe(1);
   release();
   await host.health.settled();
+  expect(starts, "the pending failure is discarded and one fresh check runs after it").toBe(2);
   expect(commandEnv(host.mounted(IRIS).notes)[MCP_RESTART_ENV]).toBe("2");
 });
 

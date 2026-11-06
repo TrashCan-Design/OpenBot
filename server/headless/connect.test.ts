@@ -1,6 +1,6 @@
 import "../testing/scrub-ambient-omb-env.ts";
 
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "../testing/cleanup.ts";
-import { writeTokenFile } from "./connect.ts";
+import { windowsTokenAcl, writeTokenFile } from "./connect.ts";
 import type { HeadlessIo } from "./output.ts";
 import { runHeadless } from "./main.ts";
 
@@ -83,5 +83,25 @@ describe("connect", () => {
     expect(remote.err[0]).toBe("error: a workspace elsewhere needs a pairing code");
     expect(() => writeTokenFile("-", "x", false)).toThrow("never to the terminal");
     expect(() => writeTokenFile("/dev/stdout", "x", true)).toThrow("never to the terminal");
+  });
+
+  it("keeps an existing token file when replacement fails, and reports a cleanup failure", () => {
+    const kept = join(dir, "kept-token");
+    writeFileSync(kept, "old-secret\n", { mode: 0o644 });
+    const folder = join(dir, "not-a-file");
+    mkdirSync(folder);
+    expect(() => writeTokenFile(folder, "new-secret", true)).toThrow();
+    expect(readFileSync(kept, "utf8")).toBe("old-secret\n");
+    expect(readdirSync(dir).filter((name) => name.startsWith("not-a-file."))).toEqual([]);
+    expect(() => writeTokenFile(join(dir, "missing", "token"), "new-secret", false, () => {
+      throw Object.assign(new Error("busy"), { code: "EBUSY" });
+    })).toThrow(/temporary file could not be removed/);
+    expect(readFileSync(kept, "utf8")).toBe("old-secret\n");
+  });
+
+  it("describes the Windows ACL that keeps a token file private", () => {
+    expect(windowsTokenAcl("C:\\Users\\ada\\token", "ada")).toEqual({
+      command: "icacls", args: ["C:\\Users\\ada\\token", "/inheritance:r", "/grant:r", "ada:(R,W)"],
+    });
   });
 });

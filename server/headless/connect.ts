@@ -1,6 +1,11 @@
 // The token is written to a file only you can read and never printed: pass the file to other verbs with --token-file.
-import { closeSync, existsSync, fchmodSync, fstatSync, openSync, writeSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, fchmodSync, fstatSync, openSync, unlinkSync, writeSync } from "node:fs";
+import { userInfo } from "node:os";
 import { isatty } from "node:tty";
+
+import { renameWithRetry } from "../atomic.ts";
 
 import { EXIT, flag, HeadlessError, usageError } from "./args.ts";
 import { loadMcp, namedServer } from "./client.ts";
@@ -18,18 +23,46 @@ async function call(origin: string, path: string, init: RequestInit = {}): Promi
   return { status: response.status, body: await response.json().catch(() => ({})) as Rec };
 }
 
-/** A new file only this user can read; never a terminal. */
-export function writeTokenFile(path: string, token: string, force: boolean): void {
+/** Windows has no POSIX mode bits. This is the ACL a token file gets there: no inherited access, only this user. */
+export function windowsTokenAcl(path: string, user = userInfo().username): { command: string; args: string[] } {
+  return { command: "icacls", args: [path, "/inheritance:r", "/grant:r", `${user}:(R,W)`] };
+}
+
+function restrictTokenFile(path: string, fd: number): void {
+  if (process.platform !== "win32") {
+    fchmodSync(fd, 0o600);
+    return;
+  }
+  const acl = windowsTokenAcl(path);
+  const result = spawnSync(acl.command, acl.args, { windowsHide: true, timeout: 10_000 });
+  if (result.status !== 0) throw Object.assign(new Error("could not keep the token file private"), { code: "EPERM" });
+}
+
+/** A new file only this user can read; never a terminal. Replacement writes a temp file and renames it over the old one. */
+export function writeTokenFile(path: string, token: string, force: boolean, removeTemp: (path: string) => void = unlinkSync): void {
   if (path === "-" || /^\/dev\/(?:stdout|stderr|tty)$/.test(path)) throw usageError("the token goes to a file, never to the terminal", "pass --out FILE");
   if (existsSync(path) && !force) throw usageError(`${path} already exists`, "pass --force to replace it");
-  const fd = openSync(path, force ? "w" : "wx", 0o600);
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd: number | null = null;
   try {
+    fd = openSync(tmp, "wx", 0o600);
     if (isatty(fd) || fstatSync(fd).isCharacterDevice()) throw usageError("the token goes to a file, never to the terminal", "pass --out FILE");
-    // a file being replaced keeps its old mode unless told
-    if (process.platform !== "win32") fchmodSync(fd, 0o600);
+    restrictTokenFile(tmp, fd);
     writeSync(fd, `${token}\n`);
-  } finally {
     closeSync(fd);
+    fd = null;
+    renameWithRetry(tmp, path);
+  } catch (error) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* report the error that stopped the write */ }
+    }
+    let cleanup = "";
+    try { removeTemp(tmp); } catch (removeError) {
+      const code = (removeError as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") cleanup = removeError instanceof Error ? removeError.message : String(removeError);
+    }
+    if (cleanup && error instanceof Error) error.message = `${error.message} (the temporary file could not be removed: ${cleanup})`;
+    throw error;
   }
 }
 

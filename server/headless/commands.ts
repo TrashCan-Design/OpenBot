@@ -124,12 +124,13 @@ export async function send(ctx: VerbContext): Promise<VerbOutcome> {
   const target = await resolveTarget(opened ? { ...ctx, flags: { ...ctx.flags, task: undefined } } : ctx, named ? undefined : first, channelOnly ? "channel" : "any");
   const tool = target.type === "bot" ? "send_bot_message" : "send_channel_message";
   const title = opened === "new" && !target.taskId ? conversationTitle(ctx, text) : undefined;
+  const sendId = flag(ctx.flags, "send-id") ?? newSendId();
   const current = opened === "current" && !target.taskId ? await conversationFor(await ctx.client(), target, "current") : undefined;
-  const args = { ...targetArgs(current ? { ...target, taskId: current } : target), text, send_id: flag(ctx.flags, "send-id") ?? newSendId() };
+  const args = { ...targetArgs(current ? { ...target, taskId: current } : target), text, send_id: sendId };
   const preview = dryRun(ctx, tool, args, title !== undefined ? { newConversation: { title } } : {});
   if (preview) return preview;
   const client = await ctx.client();
-  const result = await client.tool(tool, title !== undefined ? { ...args, task_id: await conversationFor(client, target, "new", title) } : args);
+  const result = await client.tool(tool, title !== undefined ? { ...args, task_id: await conversationFor(client, target, "new", title, sendId) } : args);
   return {
     result: title !== undefined ? { ...result, newConversation: { title } } : result, exitCode: EXIT.done,
     human: [`Sent to ${target.name ?? target.id} ${title !== undefined ? `in a new conversation, "${title}", ` : ""}(thread ${result.taskId})${result.queued ? "; it waits until the turn running there ends" : ""}.`,

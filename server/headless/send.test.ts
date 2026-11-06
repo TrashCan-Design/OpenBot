@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { OpeningBook } from "../conversation-openings.ts";
 import type { HeadlessIo } from "./output.ts";
 import { runHeadless } from "./main.ts";
 
@@ -41,8 +46,9 @@ describe("send", () => {
     const { code, out } = await h.run(["send", "Launch Room", "Plan the launch\nwith everyone", "--task", "new"]);
     expect(code).toBe(0);
     expect(h.calls.map((call) => call.name)).toEqual(["create_task", "send_channel_message"]);
-    expect(h.calls[0]!.args).toEqual({ target_type: "channel", target_id: "room", title: "Plan the launch" });
-    expect(h.calls[1]!.args).toEqual({ channel_id: "room", task_id: "fresh", text: "Plan the launch\nwith everyone", send_id: expect.stringMatching(/^cli-/) });
+    expect(h.calls[0]!.args).toMatchObject({ target_type: "channel", target_id: "room", title: "Plan the launch" });
+    expect(h.calls[0]!.args.send_id).toEqual(expect.stringMatching(/^cli-/));
+    expect(h.calls[1]!.args).toEqual({ channel_id: "room", task_id: "fresh", text: "Plan the launch\nwith everyone", send_id: h.calls[0]!.args.send_id });
     expect(out[0]).toBe('Sent to Launch Room in a new conversation, "Plan the launch", (thread fresh).');
   });
 
@@ -50,7 +56,8 @@ describe("send", () => {
     const h = harness();
     const { code, out } = await h.run(["send", "--bot", "lead", "hello", "--task", "new", "--title", "Daily check", "--json"]);
     expect(code).toBe(0);
-    expect(h.calls[0]!.args).toEqual({ target_type: "bot", target_id: "lead", title: "Daily check" });
+    expect(h.calls[0]!.args).toMatchObject({ target_type: "bot", target_id: "lead", title: "Daily check" });
+    expect(h.calls[1]!.args.send_id).toBe(h.calls[0]!.args.send_id);
     expect(JSON.parse(out[0]!)).toMatchObject({ taskId: "fresh", newConversation: { title: "Daily check" } });
   });
 
@@ -61,6 +68,60 @@ describe("send", () => {
     await h.run(["send", "Room Lead", "hello", "--task", "b-old"]);
     expect(h.calls.map((call) => [call.name, call.args.task_id])).toEqual([
       ["send_channel_message", undefined], ["send_channel_message", "r-active"], ["send_bot_message", "b-old"]]);
+  });
+
+  it("retries a new conversation with one send id, including a lost create and two at once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-send-open-"));
+    const openings = new OpeningBook(join(dir, "openings.json"));
+    let made = 0;
+    let loseCreate = true;
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    let creates = 0;
+    const calls: Array<{ name: string; args: Rec }> = [];
+    const callTool = async (name: string, args: Rec) => {
+      calls.push({ name, args });
+      if (name === "create_task") {
+        creates += 1;
+        if (creates === 1) await gate;
+        const claimed = await openings.claim(
+          { sendId: String(args.send_id), owner: args.target_type === "bot" ? "bot" : "channel", ownerId: String(args.target_id), title: String(args.title) },
+          () => ({ threadId: `t${++made}` }),
+          () => true,
+        );
+        if (!claimed.ok) throw Object.assign(new Error(claimed.error), { status: claimed.status });
+        if (loseCreate) { loseCreate = false; throw new Error("socket hang up"); }
+        return { success: true, task: { taskId: claimed.threadId } };
+      }
+      if (name === "send_bot_message") return { success: true, botId: args.bot_id, taskId: args.task_id, messageId: "m1" };
+      throw new Error(`unexpected tool ${name}`);
+    };
+    const request = async (path: string) => {
+      if (path === "/api/bots?messages=0") return { bots: [{ id: "lead", name: "Room Lead", threadId: "b-active", tasks: [] }], groups: [] };
+      throw new Error(path);
+    };
+    const run = async (argv: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: HeadlessIo = { out: (text) => out.push(text), err: (text) => err.push(text), readStdin: async () => "" };
+      const code = await runHeadless(argv, { env: { OPENMAUSBOT_URL: "http://127.0.0.1:19999" }, io, callTool: callTool as any, request: request as any });
+      return { code, out, err };
+    };
+    const sendId = "cli-same-send-id-1";
+    const argv = ["send", "--bot", "lead", "Plan the day", "--task", "new", "--send-id", sendId];
+    const lost = run(argv);
+    const concurrent = run(argv);
+    release();
+    const [first, second] = await Promise.all([lost, concurrent]);
+    expect([first.code, second.code].sort()).toEqual([0, 1]);
+    expect(made).toBe(1);
+    const sends = calls.filter((call) => call.name === "send_bot_message");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.args).toMatchObject({ task_id: "t1", send_id: sendId });
+    const again = await run(argv);
+    expect(again.code).toBe(0);
+    expect(made).toBe(1);
+    expect(calls.filter((call) => call.name === "send_bot_message").every((call) => call.args.task_id === "t1" && call.args.send_id === sendId)).toBe(true);
   });
 
   it("keeps a caller's --send-id on a retry and does not open another conversation", async () => {

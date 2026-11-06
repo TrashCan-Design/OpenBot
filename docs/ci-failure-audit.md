@@ -143,3 +143,18 @@ Client and server TypeScript checks, repository lint, locale validation, the pro
 No new full shard run was collected for the commits after `00f053431`. The red Ubuntu and Windows Vitest shards on run [42181793428](https://github.com/TrashCan-Design/OpenBot/actions/runs/42181793428) stay in the classes already recorded above until a later run shows a new name. They are not reclassified as harmless. Typecheck, lint, package, and most smoke jobs on that run passed. The Windows CUA host smoke, cloudflared installer, and control-plane jobs were skipped by the workflow, which is a missing-environment outcome for those jobs only, not evidence about the shard failures.
 
 Local checks for the data-lane interrupt, CLI conversation selection, pairing tokens, host doctor roles, stdio MCP, and command-server restart are listed in `docs/selected-upstream-work.md`. They do not replace the shard run.
+
+## Run 42255385008 — 6 November 2026 evening (Asia/Kolkata)
+
+This is the CI run for `ce3eb986`. All 16 Vitest shards failed. Browser driver checks passed. Build, packaging, lint/typecheck, and smoke jobs passed. The Windows CUA host job was skipped (missing environment for that job, not a verdict on the shards).
+
+The shard failures are not one class:
+
+1. Newly introduced regressions were not separated from the older set in this pass. The three defects found by review (new-conversation retry, token save, stale MCP probe) were reproduced outside CI and are fixed locally; they are not claimed to be the shard failures.
+2. Retained-feature end-to-end failures are still present and need one-by-one diagnosis. They are not stale labels.
+3. Stale expectations remain: product strings, analytics opt-in, and `window is not defined` in a component test.
+4. Removed Boat and hosted Cloud assertions, including legacy Documents/MausBot paths, are tests of functionality this fork does not restore.
+5. The skipped Windows CUA job is a missing environment capability.
+6. Anything in the shards not matched above stays unresolved until that log line is reproduced.
+
+This pass did not download every shard log again. The split above matches the earlier audit and the review of this run. It is not a certificate that every failure name was re-read.

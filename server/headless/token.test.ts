@@ -18,6 +18,7 @@ let origin: string;
 let registry: SessionRegistry;
 /** A server from before access tokens: it ignores tokenTtlMs. */
 let oldServer = false;
+let failRevoke = false;
 const DAY = 24 * 3_600_000;
 
 beforeAll(async () => {
@@ -38,7 +39,10 @@ beforeAll(async () => {
     }
     if (req.method === "GET" && req.url === "/api/auth/sessions") return send(200, { sessions: registry.list() });
     const revoking = /^\/api\/auth\/sessions\/([\w-]+)$/.exec(req.url ?? "");
-    if (req.method === "DELETE" && revoking) return registry.revoke(revoking[1]!) ? send(200, { ok: true }) : send(404, { error: "no such session" });
+    if (req.method === "DELETE" && revoking) {
+      if (failRevoke) return send(500, { error: "could not revoke" });
+      return registry.revoke(revoking[1]!) ? send(200, { ok: true }) : send(404, { error: "no such session" });
+    }
     send(404, { error: "no route" });
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
@@ -46,6 +50,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   oldServer = false;
+  failRevoke = false;
   registry = new SessionRegistry({ file: join(mkdtempSync(join(dir, "data-")), "sessions.json") });
 });
 afterAll(async () => {
@@ -68,7 +73,12 @@ describe("token", () => {
     expect(made.code).toBe(0);
     const token = readFileSync(file, "utf8").trim();
     expect(token).toMatch(/^omb_sess_/);
-    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform === "win32") {
+      const { windowsTokenAcl } = await import("./connect.ts");
+      expect(windowsTokenAcl(file, "ada")).toEqual({ command: "icacls", args: [file, "/inheritance:r", "/grant:r", "ada:(R,W)"] });
+    } else {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
     expect(JSON.stringify(made)).not.toContain(token);
     const result = JSON.parse(made.out[0]!);
     expect(result).toMatchObject({ ok: true, tokenFile: file, token: { name: "Nightly CI", scope: "client" } });
@@ -110,6 +120,19 @@ describe("token", () => {
     expect(made.err[0]).toBe("error: this OpenBot server cannot make access tokens");
     expect(registry.list()).toEqual([]);
     expect(() => readFileSync(file)).toThrow();
+  });
+
+  it("revokes the session when the token file cannot be saved, and says so if revocation fails", async () => {
+    const missing = join(dir, "no-such-parent", "token");
+    const failed = await run(["token", "create", "CI", "--out", missing]);
+    expect(failed.code).toBe(1);
+    expect(failed.err.join("\n")).not.toMatch(/omb_sess_/);
+    expect(registry.list()).toEqual([]);
+    failRevoke = true;
+    const stuck = await run(["token", "create", "CI", "--out", join(dir, "also-missing", "token")]);
+    expect(stuck.code).toBe(1);
+    expect(stuck.err.join("\n")).toMatch(/still active/);
+    expect(registry.list()).toMatchObject([{ label: "CI", token: true }]);
   });
 
   it("passes on the server's own limit on a token's term", async () => {

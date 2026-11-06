@@ -82,8 +82,12 @@ export async function resolveTarget(ctx: VerbContext, positional: string | undef
   return withTask({ type, id: record.id, name: record.name });
 }
 
-export async function conversationFor(client: HeadlessClient, target: Target, task: string, title = "Headless run"): Promise<string> {
-  if (task === "new") return (await client.tool("create_task", { target_type: target.type, target_id: target.id, title })).task.taskId;
+export async function conversationFor(client: HeadlessClient, target: Target, task: string, title = "Headless run", sendId?: string): Promise<string> {
+  if (task === "new") {
+    return (await client.tool("create_task", {
+      target_type: target.type, target_id: target.id, title, ...(sendId ? { send_id: sendId } : {}),
+    })).task.taskId;
+  }
   if (task !== "current") return task;
   const fleet = await client.json<Fleet>("/api/bots?messages=0");
   const owner = (target.type === "bot" ? fleet.bots : fleet.groups)?.find((record) => record.id === target.id);

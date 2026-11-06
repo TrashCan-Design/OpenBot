@@ -61,8 +61,9 @@ describe("run", () => {
     const { code, result, progress } = await h.run(["run", "Room Lead", "Rehearse the launch\nof example.com", "--json"]);
     expect(code).toBe(0);
     expect(h.calls.map((call) => call.name)).toEqual(["create_task", "send_bot_message", "wait_for_conversation"]);
-    expect(h.calls[0]!.args).toEqual({ target_type: "bot", target_id: "lead", title: "Rehearse the launch" });
-    expect(h.calls[1]!.args).toEqual({ bot_id: "lead", task_id: "t1", text: "Rehearse the launch\nof example.com", send_id: expect.stringMatching(/^cli-[\w-]{16}$/) });
+    expect(h.calls[0]!.args).toMatchObject({ target_type: "bot", target_id: "lead", title: "Rehearse the launch" });
+    expect(h.calls[0]!.args.send_id).toEqual(expect.stringMatching(/^cli-[\w-]{16}$/));
+    expect(h.calls[1]!.args).toEqual({ bot_id: "lead", task_id: "t1", text: "Rehearse the launch\nof example.com", send_id: h.calls[0]!.args.send_id });
     expect(h.calls[2]!.args).toEqual({ target_type: "bot", target_id: "lead", task_id: "t1", timeout_seconds: 120, scope: "job", since_ms: 1_000 });
     expect(h.requests.map((request) => request.path)).toEqual(["/api/bots?messages=0", "/api/threads/t1/job?"]);
     expect(result).toMatchObject({ ok: true, exitCode: 0, threadId: "t1", since: 1_000, state: "completed",
