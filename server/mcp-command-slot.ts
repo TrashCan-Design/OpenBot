@@ -1,36 +1,33 @@
 // One command MCP process for a spec. A restart swaps it only after the process we started is confirmed stopped,
 // and a call already in flight is not run again.
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, StdioOptions } from "node:child_process";
 
-import type { StdioMcpSpec } from "./contracts.ts";
 import { killCliTree, spawnCli } from "./procs.ts";
 
-const specKey = (spec: StdioMcpSpec) => JSON.stringify([spec.command, spec.args, spec.env]);
+const specKey = (spec: { command: string; args: string[]; env?: NodeJS.ProcessEnv }) => JSON.stringify([spec.command, spec.args, spec.env]);
 
 export class CommandSlot {
   private child: ChildProcess | null = null;
   private key = "";
   private calls = 0;
-  private pending: StdioMcpSpec | null = null;
+  private pending: { command: string; args: string[]; env?: NodeJS.ProcessEnv } | null = null;
   private replacing: Promise<void> | null = null;
 
   pid(): number | undefined {
     return this.child?.pid;
   }
 
-  async stop(): Promise<void> {
+  stop(timeoutMs = 1_000): Promise<boolean> {
     const old = this.child;
     this.child = null;
     this.key = "";
-    if (old) {
-      const stopped = await killCliTree(old, 1_000);
-      if (!stopped) throw new Error("could not confirm the old MCP process stopped");
-    }
+    return old ? killCliTree(old, timeoutMs) : Promise.resolve(true);
   }
 
-  start(spec: StdioMcpSpec): number {
+  start(spec: { command: string; args: string[]; env?: NodeJS.ProcessEnv }, stdio: StdioOptions = ["ignore", "ignore", "ignore"], owner: "bot" | "openmausbot" = "openmausbot"): ChildProcess {
     if (this.child) throw new Error("a command process is already running");
-    return this.spawn(spec);
+    this.owner = owner;
+    return this.spawn(spec, stdio);
   }
 
   beginCall(): void {
@@ -47,7 +44,7 @@ export class CommandSlot {
   }
 
   /** Same spec keeps the process. A different spec replaces it, or waits out the call in flight. */
-  async replace(spec: StdioMcpSpec): Promise<"kept" | "replaced" | "deferred"> {
+  async replace(spec: { command: string; args: string[]; env?: NodeJS.ProcessEnv }): Promise<"kept" | "replaced" | "deferred"> {
     if (this.child && specKey(spec) === this.key) return "kept";
     if (this.calls > 0) {
       this.pending = spec;
@@ -57,7 +54,7 @@ export class CommandSlot {
     return "replaced";
   }
 
-  private async replaceNow(spec: StdioMcpSpec): Promise<void> {
+  private async replaceNow(spec: { command: string; args: string[]; env?: NodeJS.ProcessEnv }): Promise<void> {
     if (this.replacing) return this.replacing;
     const run = (async () => {
       const old = this.child;
@@ -67,7 +64,7 @@ export class CommandSlot {
         const stopped = await killCliTree(old, 1_000);
         if (!stopped) throw new Error("could not confirm the old MCP process stopped");
       }
-      this.spawn(spec);
+      this.spawn(spec, this.stdio);
     })();
     this.replacing = run;
     try {
@@ -77,12 +74,14 @@ export class CommandSlot {
     }
   }
 
-  private spawn(spec: StdioMcpSpec): number {
-    const child = spawnCli(spec.command, spec.args, { stdio: ["ignore", "ignore", "ignore"], env: { ...process.env, ...spec.env } }, "openmausbot");
+  private stdio: StdioOptions = ["ignore", "ignore", "ignore"];
+  private owner: "bot" | "openmausbot" = "openmausbot";
+
+  private spawn(spec: { command: string; args: string[]; env?: NodeJS.ProcessEnv }, stdio: StdioOptions): ChildProcess {
+    this.stdio = stdio;
+    const child = spawnCli(spec.command, spec.args, { stdio, env: spec.env ?? process.env }, this.owner);
     this.child = child;
     this.key = specKey(spec);
-    const pid = child.pid;
-    if (!pid) throw new Error("the command process did not start");
-    return pid;
+    return child;
   }
 }

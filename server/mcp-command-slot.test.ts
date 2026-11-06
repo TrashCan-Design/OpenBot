@@ -21,7 +21,7 @@ const alive = (pid: number | undefined) => {
 describe("command MCP process replacement", () => {
   it("stops the old process before starting the next one", async () => {
     const slot = new CommandSlot();
-    const first = slot.start(spec({ OMB_MCP_RESTART: "1" }));
+    const first = slot.start(spec({ OMB_MCP_RESTART: "1" })).pid!;
     expect(alive(first)).toBe(true);
     expect(await slot.replace(spec({ OMB_MCP_RESTART: "2" }))).toBe("replaced");
     const second = slot.pid();
@@ -35,7 +35,7 @@ describe("command MCP process replacement", () => {
 
   it("waits out a call that is already running and does not run it again", async () => {
     const slot = new CommandSlot();
-    const first = slot.start(spec({}));
+    const first = slot.start(spec({})).pid!;
     let ran = 0;
     slot.beginCall();
     ran += 1;

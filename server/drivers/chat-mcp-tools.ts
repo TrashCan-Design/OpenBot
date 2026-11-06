@@ -1,11 +1,12 @@
 // Per-turn MCP transport for the Chat Completions runtime: approval is the caller's, and only
 // registered, schema-validated calls arrive here.
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { ValidateFunction } from "ajv";
 import { stripControlPlaneEnv } from "../config.ts";
 import type { SendTurnInput } from "../contracts.ts";
 import { augmentedPath } from "../env-path.ts";
-import { killCliTree, spawnCli } from "../procs.ts";
+import { CommandSlot } from "../mcp-command-slot.ts";
 import { AGENTS_TOOL_ALIASES } from "../../shared/agents-tool-names.ts";
 import { bridgedCallTarget, unbridgedServer } from "./agents-bridge.ts";
 import { chatImage, type ChatImagePart } from "./chat-images.ts";
@@ -78,7 +79,8 @@ export function chatMcpEnvironment(serverEnv: Record<string, string>, source: No
 
 export class ChatMcpClient {
   private readonly frameBytes: number;
-  private child: ReturnType<typeof spawnCli>;
+  private readonly slot = new CommandSlot();
+  private child: ChildProcessWithoutNullStreams;
   private buffer = "";
   private nextId = 1;
   private frames = 0;
@@ -90,9 +92,9 @@ export class ChatMcpClient {
     this.frameBytes = computerUse ? 32 * 1024 * 1024 : FRAME_BYTES;
     try {
       // The desktop shell inherits Finder's bare PATH, where `npx`-style servers cannot find `node`.
-      this.child = spawnCli(server.command, server.args, {
-        stdio: ["pipe", "pipe", "pipe"], env: chatMcpEnvironment(server.env),
-      }, "bot");
+      const started = this.slot.start({ command: server.command, args: server.args, env: chatMcpEnvironment(server.env) }, ["pipe", "pipe", "pipe"], "bot");
+      if (!started.stdin || !started.stdout || !started.stderr) throw new Error("MCP server pipes did not open");
+      this.child = started as ChildProcessWithoutNullStreams;
     } catch { throw new Error("MCP server could not start; check its command and installation"); }
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.onData(chunk));
@@ -121,7 +123,7 @@ export class ChatMcpClient {
     this.buffer = "";
     // Windows reaps the tree via taskkill /T, which can exceed shorter budgets on a loaded machine;
     // elsewhere the budget is the TERM grace before KILL, not a verdict race, so it stays short.
-    this.closing = killCliTree(this.child, process.platform === "win32" ? 15_000 : 5_000).then((stopped) => {
+    this.closing = this.slot.stop(process.platform === "win32" ? 15_000 : 5_000).then((stopped) => {
       if (stopped) return;
       if (!inFlight) {
         console.warn("chat-mcp: shutdown could not be confirmed within its budget; no call was in flight, so the turn outcome is unaffected");
@@ -175,6 +177,7 @@ export class ChatMcpClient {
     if (signal.aborted) { await this.close(); throw aborted(); }
     if (this.closed) throw new Error("MCP session closed");
     const id = this.nextId++;
+    this.slot.beginCall();
     try {
       return await new Promise((resolve, reject) => {
         const finish = (error?: Error, value?: unknown) => {
@@ -198,6 +201,8 @@ export class ChatMcpClient {
     } catch (error) {
       if (!(keepOnRefusal && error instanceof McpRequestRefused)) await this.close();
       throw error;
+    } finally {
+      await this.slot.endCall();
     }
   }
 
