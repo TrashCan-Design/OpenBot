@@ -311,7 +311,7 @@ export async function hostDoctor(ctx: VerbContext, probe: HostProbe = systemProb
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw usageError("--port must be 1-65535");
   const timeUrl = flag(ctx.flags, "time-url")?.trim();
-  if (timeUrl !== undefined && !/^https:\/\//.test(timeUrl)) throw usageError("--time-url must be an https address you operate");
+  if (timeUrl !== undefined && !timeUrl.startsWith("https://")) throw usageError("--time-url must be an https address you operate");
   const dataDir = posix.resolve(flag(ctx.flags, "data-dir") ?? ctx.env.OMB_DATA_DIR ?? join(homedir(), ".openbot"));
   const domain = flag(ctx.flags, "domain")?.trim().toLowerCase();
   const role = hostRole(probe.platform, ctx.flags.desktop === true);

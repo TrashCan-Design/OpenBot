@@ -199,10 +199,11 @@ export function pairingRequest(body: unknown, held?: readonly Scope[]): PairingR
   if (ttlMs === null) return { error: "ttlMs must be a whole number of milliseconds, from one minute to 24 hours", status: 400 };
   const tokenTtlMs = within(record.tokenTtlMs, 60_000, SESSION_MAX_AGE_MS);
   if (tokenTtlMs === null) return { error: `a token lasts from one minute to ${Math.floor(SESSION_MAX_AGE_MS / DAY_MS)} days on this server (OMB_SESSION_MAX_DAYS)`, status: 400 };
-  const named = Array.isArray(record.scopes);
-  const listed = named ? record.scopes.filter((v): v is Scope => v === "admin" || v === "client") : undefined;
-  if (named && record.scopes.length > 0 && !listed?.length) return { error: "scopes must be admin or client", status: 400 };
-  let scopes = listed && listed.length ? [...new Set(listed)] : undefined;
+  const rawScopes = record.scopes;
+  const named = Array.isArray(rawScopes);
+  const listed: Scope[] | undefined = named ? rawScopes.filter((v): v is Scope => v === "admin" || v === "client") : undefined;
+  if (named && rawScopes.length > 0 && !listed?.length) return { error: "scopes must be admin or client", status: 400 };
+  let scopes: Scope[] | undefined = listed && listed.length ? [...new Set(listed)] : undefined;
   if (held) {
     const allowed = new Set(held);
     const asked = scopes ?? [...held];

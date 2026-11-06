@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
+import type { McpServerSpec } from "../contracts.ts";
 import type { AppConfig } from "../config.ts";
 import { MCP_RESTART_ENV, mcpServerConfigHash } from "../mcp-app-catalog.ts";
 import { claimedNotice, createMcpServersHost } from "./mcp-servers-host.ts";
@@ -11,6 +12,10 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 const IRIS = { id: "iris", name: "Iris" }, PAUL = { id: "paul", name: "Paul" }, ROSA = { id: "rosa", name: "Rosa", mcpServers: [] as string[] };
+const commandEnv = (server: McpServerSpec | undefined): Record<string, string> => {
+  if (!server || !("command" in server)) throw new Error("expected a command server");
+  return server.env;
+};
 const NOTES_ONLY = { id: "nina", name: "Nina", toolScope: { allow: ["mcp:notes:*"] } }, NO_SERVERS = { id: "otto", name: "Otto" };
 
 function script(data: string, ...parts: string[]): string {
@@ -113,9 +118,9 @@ it("restarts a command server in the next turn's spec and leaves its saved keys,
   host.boot();
   await host.health.settled();
   const savedNotes = JSON.stringify(notes);
-  const first = host.mounted(IRIS).notes;
-  expect("command" in first && first.env.TOKEN).toBe("saved-secret");
-  expect("command" in first && first.env[MCP_RESTART_ENV]).toBeUndefined();
+  const first = commandEnv(host.mounted(IRIS).notes);
+  expect(first.TOKEN).toBe("saved-secret");
+  expect(first[MCP_RESTART_ENV]).toBeUndefined();
   expect(host.restart("notes")).toEqual({ ok: true });
   expect(host.restart("missing")).toMatchObject({ ok: false, status: 404 });
   cfg.mcpServers!.remote = { type: "http", url: "https://notes.example/mcp", headers: { Authorization: "saved-secret" }, enabled: true };
@@ -125,12 +130,13 @@ it("restarts a command server in the next turn's spec and leaves its saved keys,
   notes.enabled = true;
   expect(JSON.stringify(notes)).toBe(savedNotes);
   const again = host.mounted(IRIS).notes;
-  expect("command" in again && again.env).toMatchObject({ TOKEN: "saved-secret", [MCP_RESTART_ENV]: "1" });
-  expect(mcpServerConfigHash(first)).toBe(mcpServerConfigHash(again));
+  if (!again || !("command" in again)) throw new Error("expected a command server");
+  expect(again.env).toMatchObject({ TOKEN: "saved-secret", [MCP_RESTART_ENV]: "1" });
+  expect(mcpServerConfigHash({ ...again, env: first })).toBe(mcpServerConfigHash(again));
   expect(host.restart("notes")).toEqual({ ok: true });
-  expect("command" in host.mounted(IRIS).notes && host.mounted(IRIS).notes.env[MCP_RESTART_ENV]).toBe("2");
+  expect(commandEnv(host.mounted(IRIS).notes)[MCP_RESTART_ENV]).toBe("2");
   host.forgetRestart("notes");
-  expect("command" in host.mounted(IRIS).notes && host.mounted(IRIS).notes.env[MCP_RESTART_ENV]).toBeUndefined();
+  expect(commandEnv(host.mounted(IRIS).notes)[MCP_RESTART_ENV]).toBeUndefined();
   expect(started.filter((line) => line.startsWith("notes:")).length).toBeGreaterThan(0);
 });
 
@@ -152,7 +158,7 @@ it("one restart check runs while an earlier check of that server is still starti
   expect(starts).toBe(1);
   release();
   await host.health.settled();
-  expect("command" in host.mounted(IRIS).notes && host.mounted(IRIS).notes.env[MCP_RESTART_ENV]).toBe("2");
+  expect(commandEnv(host.mounted(IRIS).notes)[MCP_RESTART_ENV]).toBe("2");
 });
 
 it("says it in one plain line per bot", () => {
