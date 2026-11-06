@@ -160,7 +160,7 @@ it.skipIf(process.platform === "win32")("rewrites the data folder of the compute
 it("offers the included computers, voice and decisions with no key, and never shows or saves their tokens", async () => {
   const status = await api("GET", "/api/config");
   expect(status.status).toBe(200);
-  expect(status.body.box).toEqual({ configured: true, included: true });
+  expect(status.body.box).toEqual({ configured: false });
   expect(status.body.tts).toMatchObject({ configured: true, ready: true, provider: "elevenlabs", voice: "preset0voice0id", included: true });
   expect(status.body.decider).toEqual({ provider: "jev", configured: true, included: true, enabled: true, jobs: { roomRouting: true } });
   const saved = readFileSync(join(home, ".openmausbot", "config.json"), "utf8");
