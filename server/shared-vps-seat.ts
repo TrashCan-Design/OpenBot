@@ -61,6 +61,8 @@ export class SharedVpsSeat {
     const owner = this.owner(alias, lease);
     const deadline = Date.now() + TAKE_TIMEOUT_MS;
     this.resources.startWaiting(resource, owner);
+    // Release only a claim this attempt made and did not keep. Another take of this lease matches by id, not by this object.
+    let releaseClaim = false;
     try {
       while (Date.now() < deadline && !signal?.aborted) {
         if (this.owns(alias, lease, session)) return { held: true, owned: true, acquired: false };
@@ -68,12 +70,14 @@ export class SharedVpsSeat {
           throw Object.assign(new Error("The shared desktop is controlled by another session"), { status: 409 });
         }
         if (this.resources.claim(resource, owner)) {
+          releaseClaim = true;
           if (signal?.aborted) break;
           const acquired = this.control.acquireLease(sharedVpsControlKey(alias), lease);
           if (!acquired.owned) break;
           const timer = setTimeout(() => this.release(alias, lease), LEASE_IDLE_MS);
           timer.unref?.();
           this.seats.set(alias, { owner, session, timer });
+          releaseClaim = false;
           return { held: true, owned: true, acquired: acquired.acquired };
         }
         await new Promise<void>((resolve) => {
@@ -85,8 +89,8 @@ export class SharedVpsSeat {
       }
       throw Object.assign(new Error(signal?.aborted ? "Desktop control request cancelled" : "Timed out waiting for the shared desktop"), { status: signal?.aborted ? 499 : 409 });
     } finally {
-      if (this.seats.get(alias)?.owner === owner) this.resources.stopWaiting(resource, owner);
-      else this.resources.releaseOne(resource, owner);
+      this.resources.stopWaiting(resource, owner);
+      if (releaseClaim) this.resources.releaseOne(resource, owner);
     }
   }
 

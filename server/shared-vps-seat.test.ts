@@ -78,6 +78,41 @@ describe("shared VPS desktop ownership", () => {
     }
   });
 
+  it("keeps the seat when a second take of the same lease was already waiting", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const bot = { threadId: "alpha", generation: "one" };
+    resources.claim(resource, bot);
+    const first = seat.take(alias, person, undefined, "session-one");
+    const second = seat.take(alias, person, undefined, "session-one");
+    expect(resources.waiting(resource)).toHaveLength(1);
+    resources.release(bot);
+    await expect(first).resolves.toMatchObject({ held: true, owned: true });
+    await expect(second).resolves.toMatchObject({ held: true, owned: true, acquired: false });
+    expect(seat.owns(alias, person, "session-one")).toBe(true);
+    expect(resources.holder(resource)?.generation).toBe(person);
+    expect(seat.release(alias, person, "session-one")).toBe(true);
+    expect(resources.holder(resource)).toBeUndefined();
+    seat.close();
+  });
+
+  it("does not let a different session's waiter drop the lease the first session won", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const bot = { threadId: "alpha", generation: "one" };
+    resources.claim(resource, bot);
+    const winner = seat.take(alias, person, undefined, "session-one");
+    const other = seat.take(alias, person, undefined, "session-two");
+    resources.release(bot);
+    await expect(winner).resolves.toMatchObject({ held: true, owned: true });
+    await expect(other).rejects.toThrow(/another session/);
+    expect(seat.owns(alias, person, "session-one")).toBe(true);
+    expect(seat.allows(alias, "session-two")).toBe(false);
+    expect(resources.holder(resource)?.generation).toBe(person);
+    expect(seat.release(alias, person, "session-one")).toBe(true);
+    seat.close();
+  });
+
   it("does not let a different signed-in session release or view the current seat", async () => {
     const seat = new SharedVpsSeat(new TurnResources(), new ComputerControl());
     await seat.take(alias, person, undefined, "session-one");
