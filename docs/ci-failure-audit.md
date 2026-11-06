@@ -158,3 +158,7 @@ The shard failures are not one class:
 6. Anything in the shards not matched above stays unresolved until that log line is reproduced.
 
 This pass did not download every shard log again. The split above matches the earlier audit and the review of this run. It is not a certificate that every failure name was re-read.
+
+## Observation pass — 7 November 2026 (Asia/Kolkata)
+
+No new shard run was collected after `2b3e8d8e8d`. Run 42255385008 remains the last full CI result and stays red for the reasons above. Local Linux tests for the shared-seat, conversation-opening, chat MCP, bridge, and VPS routing files were run for the observation change. They do not replace that shard run and they are not a GCP or Windows desktop check.
