@@ -28,5 +28,8 @@ runMcpBridge({
   reconnect: process.env.OMB_VPS_RECONNECT === "1",
   // Probe the transport, not the driver: a busy desktop mid-tool-call must never look dead.
   liveness: { command: "docker", args: vpsDockerArgs(sshAlias, ["version", "--format", "{{.Server.Version}}"]) },
-  ...(controlUrl && controlToken ? { gate: { url: controlUrl, token: controlToken } } : {}),
+  ...(controlUrl && controlToken ? { gate: { url: controlUrl, token: controlToken, describe: (frame: unknown): Record<string, string> => {
+    const params = frame && typeof frame === "object" ? (frame as { params?: { name?: unknown } }).params : undefined;
+    return typeof params?.name === "string" ? { tool: params.name } : {};
+  } } } : {}),
 });

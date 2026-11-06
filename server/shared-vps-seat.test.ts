@@ -105,11 +105,13 @@ describe("shared VPS desktop ownership", () => {
     const other = seat.take(alias, person, undefined, "session-two");
     resources.release(bot);
     await expect(winner).resolves.toMatchObject({ held: true, owned: true });
-    await expect(other).rejects.toThrow(/another session/);
-    expect(seat.owns(alias, person, "session-one")).toBe(true);
     expect(seat.allows(alias, "session-two")).toBe(false);
+    expect(seat.release(alias, person, "session-two")).toBe(false);
     expect(resources.holder(resource)?.generation).toBe(person);
     expect(seat.release(alias, person, "session-one")).toBe(true);
+    await expect(other).resolves.toMatchObject({ held: true, owned: true });
+    expect(seat.allows(alias, "session-two")).toBe(true);
+    expect(seat.release(alias, person, "session-two")).toBe(true);
     seat.close();
   });
 
@@ -197,6 +199,77 @@ describe("shared VPS desktop ownership", () => {
     seat.release(alias, person, "one");
     expect(resources.claim(resource, beta)).toBe(true);
     resources.release(beta);
+    seat.close();
+  });
+
+  it("reads a frame without taking, queueing, or renewing control", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    await seat.take(alias, person, undefined, "session-one");
+    const epoch = seat.frame(alias).epoch;
+    seat.note(alias, "observer:turn");
+    expect(seat.frame(alias)).toEqual({ epoch, inputPermitted: false, recovering: false, controller: "person" });
+    expect(resources.waiting(resource)).toHaveLength(0);
+    expect(seat.owns(alias, person, "session-one")).toBe(true);
+    expect(seat.admit(alias, "observer:turn")).toBe("recovering");
+    expect(seat.frame(alias).recovering).toBe(false);
+    expect(seat.owns(alias, person, "session-one")).toBe(true);
+    seat.close();
+  });
+
+  it("rejects a mutation until this owner has a fresh observation, including one from the previous epoch", () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const first = { threadId: "alpha", generation: "one" };
+    const second = { threadId: "beta", generation: "two" };
+    resources.claim(resource, first);
+    seat.note(alias, "alpha:one");
+    expect(seat.admit(alias, "beta:two")).toBe("recovering");
+    expect(seat.admit(alias, "alpha:one")).toBe("ok");
+    seat.finish(alias, "alpha:one");
+    resources.release(first);
+    resources.claim(resource, second);
+    expect(seat.admit(alias, "alpha:one")).toBe("recovering");
+    expect(seat.admit(alias, "beta:two")).toBe("stale");
+    seat.note(alias, "beta:two");
+    expect(seat.admit(alias, "beta:two")).toBe("ok");
+    seat.finish(alias, "beta:two");
+    resources.release(second);
+    seat.close();
+  });
+
+  it("does not hand the desktop to the next owner while a mutation is still out", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const alpha = { threadId: "alpha", generation: "one" };
+    resources.claim(resource, alpha);
+    seat.note(alias, "alpha:one");
+    expect(seat.admit(alias, "alpha:one")).toBe("ok");
+    let settled = false;
+    const next = seat.take(alias, person).then((result) => { settled = true; return result; });
+    resources.release(alpha);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(seat.recovering(alias)).toBe(true);
+    expect(resources.holder(resource)?.threadId).toBe(`shared-vps-recovery:${alias}`);
+    expect(seat.finish(alias, "other:turn")).toBeUndefined();
+    expect(seat.recovering(alias)).toBe(true);
+    expect(settled).toBe(false);
+    seat.finish(alias, "alpha:one");
+    await expect(next).resolves.toMatchObject({ held: true, owned: true });
+    expect(seat.recovering(alias)).toBe(false);
+    seat.close();
+  });
+
+  it("releases only the revoked session's seat", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    await seat.take(alias, person, undefined, "session-one");
+    seat.releaseSession("session-two");
+    expect(seat.owns(alias, person, "session-one")).toBe(true);
+    seat.releaseSession("session-one");
+    expect(seat.owns(alias, person, "session-one")).toBe(false);
+    expect(resources.holder(resource)).toBeUndefined();
     seat.close();
   });
 });

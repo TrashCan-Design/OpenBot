@@ -1320,7 +1320,7 @@ export function ComputerPanel({
             )}
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && !liveHere && <span className="text-[11px]">{t("computer.badge.vps")}</span>}
         </div>
-        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} />
+        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} botId={bot.id} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} onSnapshot={(snap) => dispatch({ type: "computerControl", botId: bot.id, held: snap.held, helpReason: snap.helpReason, help: snap.help ?? null })} />
         <div className={cn("relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card", liveHere && "ring-2 ring-accent")}>
           {liveHere && liveTarget ? (
             <Suspense fallback={<Loader2 size={18} className="animate-spin text-ink-secondary" />}>

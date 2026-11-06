@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 import { ReconnectingMcp, type McpProcess } from "./mcp-reconnect.ts";
+import { sharedObservationTool } from "./shared-vps.ts";
 import { CONTROL_ACT_WITHIN_MS, CONTROL_UNCONFIRMED, CONTROL_WAITED, controlRefusal, createControlClient, type ControlState } from "./control-client.ts";
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
 import { textOnlyErrorResultLine } from "./mcp-error-result.ts";
@@ -350,7 +351,17 @@ export function runMcpBridge(options: BridgeOptions): void {
     respond(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }));
   };
   let sending: Promise<void> = Promise.resolve();
+  const admitted = new Set<string>();
+  const observed = new Set<string>();
+  const report = (phase: "end" | "seen") => {
+    if (!options.gate) return;
+    const url = options.gate.url;
+    void fetch(`${url}${url.includes("?") ? "&" : "?"}phase=${phase}`, { headers: { authorization: `Bearer ${options.gate.token}` } }).catch(() => {});
+  };
   const forward = (line: string): void | Promise<void> => {
+    const call = relayableCall(line);
+    if (call && sharedObservationTool(call.call.name)) observed.add(String(call.id));
+    else if (call) admitted.add(String(call.id));
     if (!options.relay) {
       child.stdin.write(line + "\n");
       return;
@@ -380,7 +391,15 @@ export function runMcpBridge(options: BridgeOptions): void {
   });
 
   const outbound = createLineSplitter((line) => {
-    if (!children.take(line)) respond(line);
+    if (!children.take(line)) {
+      let frame: { id?: unknown; result?: unknown; error?: unknown } | null = null;
+      try { frame = JSON.parse(line); } catch { frame = null; }
+      const id = frame && (frame.result !== undefined || frame.error !== undefined) ? String(frame.id) : "";
+      const toolError = Boolean(frame?.result && typeof frame.result === "object" && (frame.result as { isError?: unknown }).isError === true);
+      if (id && observed.delete(id) && frame?.error === undefined && !toolError) report("seen");
+      if (id && admitted.delete(id)) report("end");
+      respond(line);
+    }
   });
   child.stdout.on("data", (chunk) => outbound.push(chunk));
   child.stdout.on("end", () => outbound.flush());

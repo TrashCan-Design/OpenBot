@@ -13,11 +13,18 @@ export class TurnResources {
   private readonly waiters = new Map<string, TurnOwner[]>();
   private readonly waitStats = new Map<string, { ewmaMs: number; samples: number }>();
   private readonly claimListeners = new Set<(resource: string, owner: TurnOwner) => void>();
+  private readonly releaseListeners = new Set<(resource: string, owner: TurnOwner) => void>();
 
   /** Told each time a claim makes a turn a resource's new holder; returns the way to stop listening. */
   onClaim(listener: (resource: string, owner: TurnOwner) => void): () => void {
     this.claimListeners.add(listener);
     return () => { this.claimListeners.delete(listener); };
+  }
+
+  /** Told after a holder is removed, so a shared desktop can keep writes blocked while a remote action is still out. */
+  onRelease(listener: (resource: string, owner: TurnOwner) => void): () => void {
+    this.releaseListeners.add(listener);
+    return () => { this.releaseListeners.delete(listener); };
   }
 
   startWaiting(resource: string, owner: TurnOwner): number {
@@ -69,6 +76,14 @@ export class TurnResources {
     return current && !sameOwner(current, owner) ? current : undefined;
   }
 
+  /** Holds a free resource without taking a queue place. A recovery owner uses this so waiters keep their order. */
+  hold(resource: string, owner: TurnOwner): boolean {
+    if (this.owners.has(resource)) return false;
+    this.owners.set(resource, owner);
+    for (const listener of this.claimListeners) listener(resource, owner);
+    return true;
+  }
+
   claim(resource: string, owner: TurnOwner): boolean {
     if (this.blocker(resource, owner)) return false;
     const existing = this.owners.get(resource);
@@ -101,12 +116,17 @@ export class TurnResources {
       else this.waiters.delete(key);
     }
     for (const [key, current] of this.owners) {
-      if (sameOwner(current, owner)) this.owners.delete(key);
+      if (!sameOwner(current, owner)) continue;
+      this.owners.delete(key);
+      for (const listener of this.releaseListeners) listener(key, owner);
     }
   }
 
   releaseOne(resource: string, owner: TurnOwner): void {
-    if (this.owns(resource, owner)) this.owners.delete(resource);
+    if (this.owns(resource, owner)) {
+      this.owners.delete(resource);
+      for (const listener of this.releaseListeners) listener(resource, owner);
+    }
     this.stopWaiting(resource, owner);
   }
 

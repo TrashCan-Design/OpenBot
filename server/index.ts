@@ -212,7 +212,7 @@ import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts";
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
 import { applyChannelUpdate } from "./channel-update.ts";
-import { describeSharedDesktop, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { describeSharedDesktop, SHARED_FRESH_OBSERVATION, sharedObservationTool, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
@@ -4682,6 +4682,7 @@ const desktopViewer = createDesktopViewer({
   },
 });
 function closeSessionStreams(sessionId: string): void {
+  sharedVpsSeat.releaseSession(sessionId);
   browserLive.closeForOwner(sessionId);
   desktopViewer.closeForOwner(sessionId);
   for (const client of sseClients) {
@@ -4692,7 +4693,6 @@ sessions.onSessionRevoked((sessionId) => {
   providerAuthSessions.revokeOwner(sessionId);
   mcpOAuth.revokeOwner(sessionId);
   closeSessionStreams(sessionId);
-  // A revoked owner device no longer vouches for its lines (cloudOwnerPerson).
   ownerOnlyCache.clear();
 });
 
@@ -5683,7 +5683,7 @@ function sharedVpsSnapshot(bot: BotRecord) {
   return describeSharedDesktop({
     alias, holder: alias ? turnResources.holder(resource) ?? null : null,
     waiting: alias ? turnResources.waiting(resource) : [],
-    personControls: alias ? computerControl.snapshot(sharedVpsControlKey(alias)).held : false,
+    personControls: alias ? computerControl.snapshot(sharedVpsControlKey(alias)).held : false, recovering: alias ? sharedVpsSeat.recovering(alias) : false,
     botFor: (owner) => {
       const found = store.botByThread(owner.threadId) ?? store.bots.find(candidate => activeVpsThreads.get(candidate.id)?.has(owner.threadId) &&
         candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === alias);
@@ -5692,10 +5692,8 @@ function sharedVpsSnapshot(bot: BotRecord) {
   });
 }
 
-/** Waits here up to COMPUTER_CALL_WAIT_MS; a call that waited through a person's hold, or whose turn ended, is never performed. */
-async function computerCallGate(internalCapability: InternalCapability, signal?: AbortSignal, call?: ReturnType<typeof yourComputerCallFrom>): Promise<ControlState> {
-  const { botId, threadId, generation } = internalCapability;
-  const askedAt = Date.now();
+async function computerCallGate(internalCapability: InternalCapability, signal?: AbortSignal, call?: ReturnType<typeof yourComputerCallFrom>, query?: URLSearchParams): Promise<ControlState> {
+  const { botId, threadId, generation } = internalCapability; const askedAt = Date.now(); const sharedOwner = `${threadId}:${generation}`; const sharedBot = store.bot(botId); const sharedAlias = sharedBot?.cloudBackend === "vps" && sharedBot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, sharedBot) : null; if (sharedAlias && query?.get("phase") === "end") { sharedVpsSeat.finish(sharedAlias, sharedOwner); return { held: false, helpOpen: false }; } if (sharedAlias && query?.get("phase") === "seen") { sharedVpsSeat.note(sharedAlias, sharedOwner); return { held: false, helpOpen: false }; } if (sharedAlias && sharedObservationTool(query?.get("tool"))) return { held: false, helpOpen: false };
   const deadline = askedAt + COMPUTER_CALL_WAIT_MS;
   let personHeld = false;
   for (;;) {
@@ -5733,7 +5731,9 @@ async function computerCallGate(internalCapability: InternalCapability, signal?:
       } else if (personHeld) {
         return { held: true, helpOpen, blockedReason: CONTROL_HANDED_BACK };
       } else {
-        return Date.now() - askedAt > COMPUTER_CALL_ACT_WITHIN_MS ? { held: true, helpOpen, blockedReason: CONTROL_WAITED } : { held: false, helpOpen };
+        if (Date.now() - askedAt > COMPUTER_CALL_ACT_WITHIN_MS) return { held: true, helpOpen, blockedReason: CONTROL_WAITED };
+        if (sharedAlias && query?.get("tool")) { const admitted = sharedVpsSeat.admit(sharedAlias, sharedOwner); if (admitted !== "ok") return { held: true, helpOpen: false, blockedReason: admitted === "stale" ? SHARED_FRESH_OBSERVATION : CONTROL_BUSY }; }
+        return { held: false, helpOpen };
       }
     }
     if (Date.now() >= deadline || signal?.aborted || !internalCapabilityIsActive(internalCapability)) return held;
@@ -14739,7 +14739,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (method === "GET") { savedSteps.gateChecked(internalCapability);
           const abort = new AbortController();
           res.once("close", () => { if (!res.writableEnded) abort.abort(); });
-          return json(res, 200, await computerCallGate(internalCapability, abort.signal, yourComputerCallFrom(url.searchParams)));
+          return json(res, 200, await computerCallGate(internalCapability, abort.signal, yourComputerCallFrom(url.searchParams), url.searchParams));
         }
         return json(res, 405, { error: "method not allowed" });
       }
@@ -15498,7 +15498,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const sharedAlias = bot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, bot) : null;
         if (m[2] === "screenshot") {
           res.setHeader("cache-control", "private, no-store");
-          return json(res, 200, await computerPreviews.capture(desktopId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), desktopId)));
+          return json(res, 200, { ...(await computerPreviews.capture(desktopId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), desktopId))), ...(sharedAlias ? { ...sharedVpsSeat.frame(sharedAlias), capturedAt: Date.now() } : {}) });
         }
         if (sharedAlias && m[2] === "remove") return json(res, 409, { error: "Manage the shared VPS desktop from Settings → Computers; removing a bot never removes it" });
         if (sharedAlias && m[2] === "join" && !sharedVpsSeat.allows(sharedAlias, auth.kind === "session" ? auth.session.id : "loopback")) {
