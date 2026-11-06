@@ -18,7 +18,12 @@ const T = "TARGET is a bot or room by name or id, or --bot ID, --channel ID, --t
 export const VERB_HELP: Record<string, string> = {
   doctor: `openmausbot doctor [--wait DURATION]
   Check the server answers, is new enough, says who you are to it, and has an engine ready.
-  --wait 2m keeps checking until it is ready. Exit 0 ready, 1 no engine, 5 unreachable or too old.`,
+  --wait 2m keeps checking until it is ready. Exit 0 ready, 1 no engine, 5 unreachable or too old.
+openmausbot doctor --host [--desktop] [--data-dir DIR] [--port 8799] [--domain HOST] [--time-url https://…]
+  On Linux, check this machine as a host for OpenBot and the bot sandbox. --desktop checks a VPS that
+  only runs the remote desktop container: it does not require the bot sandbox, and it does not install
+  packages or use Google Cloud CLI. On Windows it reports the local app and does not require a Linux server.
+  Exit 0 ready (warnings allowed), 7 something that role needs is missing.`,
   bots: "openmausbot bots\n  Your bots and what each is doing.",
   channels: "openmausbot channels\n  Your rooms (group chats) and who is in them.",
   models: "openmausbot models\n  The engines and the models each offers (use them as INSTANCE/MODEL).",

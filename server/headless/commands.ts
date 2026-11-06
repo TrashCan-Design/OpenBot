@@ -65,6 +65,13 @@ async function doctorOnce(ctx: VerbContext): Promise<VerbOutcome> {
 }
 
 export async function doctor(ctx: VerbContext): Promise<VerbOutcome> {
+  if (ctx.flags.host === true) {
+    if (flag(ctx.flags, "wait") !== undefined || flag(ctx.flags, "url") !== undefined) throw usageError("doctor --host checks this machine: drop --wait and --url");
+    return (await import("./host-doctor.ts")).hostDoctor(ctx);
+  }
+  if (flag(ctx.flags, "data-dir") !== undefined || flag(ctx.flags, "domain") !== undefined || flag(ctx.flags, "time-url") !== undefined || ctx.flags.desktop === true) {
+    throw usageError("--data-dir, --domain, --time-url and --desktop go with doctor --host");
+  }
   const raw = flag(ctx.flags, "wait");
   const deadline = Date.now() + (raw ? parseDuration(raw, "--wait") : 0);
   for (;;) {

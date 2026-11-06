@@ -137,3 +137,9 @@ The review also identified that a dropped MCP connection ended the shared bot's 
 The broad regression run passed 206 tests and skipped one production process-tree check; its only failure was four extra lines in `server/index.ts`. Moving the HTTP cancellation adapter into the shared-seat module restored the existing size limit. The affected routing, lease and size checks then passed 30/30. The skipped cleanup check is an environment capability limit: even an exited disposable process cannot be verified by the production process-tree helper here. Protocol tests use known leaf processes; production stops recovery when cleanup cannot be verified.
 
 Client and server TypeScript checks, repository lint, locale validation, the production UI build, the server bundle, and the isolated packaged-server smoke passed after these corrections. The packaged smoke verified all 13 spawned proxy paths, MCP stdio, CLI requests, backup export, launcher shutdown, and the packaged desktop entry. No GCP connection or live Windows desktop operation was performed.
+
+## Selected-feature pass — 6 November 2026, evening (Asia/Kolkata)
+
+No new full shard run was collected for the commits after `00f053431`. The red Ubuntu and Windows Vitest shards on run [42181793428](https://github.com/TrashCan-Design/OpenBot/actions/runs/42181793428) stay in the classes already recorded above until a later run shows a new name. They are not reclassified as harmless. Typecheck, lint, package, and most smoke jobs on that run passed. The Windows CUA host smoke, cloudflared installer, and control-plane jobs were skipped by the workflow, which is a missing-environment outcome for those jobs only, not evidence about the shard failures.
+
+Local checks for the data-lane interrupt, CLI conversation selection, pairing tokens, host doctor roles, stdio MCP, and command-server restart are listed in `docs/selected-upstream-work.md`. They do not replace the shard run.

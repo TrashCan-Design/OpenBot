@@ -70,6 +70,7 @@ one of its conversations.
 | Command | What it does |
 |---|---|
 | `doctor [--wait 2m]` | Checks the server answers, is new enough, who you are to it (and when your session expires), that an engine is ready, and whether bots have a browser. |
+| `doctor --host [--desktop]` | Looks at this machine and does not change it. On Linux it checks a host for OpenBot and the bot sandbox. `--desktop` checks a VPS that only runs the remote desktop container and does not require the sandbox or Google Cloud CLI. On Windows it reports the local app. |
 | `bots`, `channels`, `models` | Your bots and what each is doing, your rooms, the engines and the models each offers. |
 | `messages TARGET [--limit 30]` | The latest messages of a conversation. |
 | `send TARGET TEXT` | Sends one message and returns at once. `--task current` (the default) uses the open conversation, `--task new` starts one (titled by `--title` or the first line), and `--task ID` selects that conversation. The reply names the conversation. `--send-id ID` makes a retry safe: the same id never sends twice. |
