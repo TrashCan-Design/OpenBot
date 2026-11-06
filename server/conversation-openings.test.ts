@@ -57,6 +57,48 @@ describe("conversation openings", () => {
     expect(made).toBe(1);
   });
 
+  it("does not create a conversation when the retry record cannot be saved", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-openings-"));
+    dirs.push(dir);
+    const openings = new OpeningBook(join(dir, "conversation-openings.json"), () => { throw new Error("disk full"); });
+    let made = 0;
+    const result = await openings.claim({ sendId: SEND, owner: "bot", ownerId: "lead", title: "Plan" }, () => { made += 1; return { threadId: "t1" }; }, () => true);
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(made).toBe(0);
+  });
+
+  it("does not open a second conversation when the process dies between creation and the receipt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-openings-"));
+    dirs.push(dir);
+    let writes = 0;
+    const openings = new OpeningBook(join(dir, "conversation-openings.json"), () => {
+      writes += 1;
+      if (writes >= 2) throw new Error("crash before the receipt");
+    });
+    let made = 0;
+    const input = { sendId: SEND, owner: "bot" as const, ownerId: "lead", title: "Plan" };
+    const first = await openings.claim(input, () => { made += 1; return { threadId: "created" }; }, () => true);
+    expect(first).toMatchObject({ ok: false, status: 500 });
+    expect(made).toBe(1);
+    const retry = await openings.claim(input, () => { made += 1; return { threadId: "again" }; }, () => true);
+    expect(retry).toMatchObject({ ok: false, status: 409 });
+    expect(made).toBe(1);
+  });
+
+  it("may open a new conversation after the retry record expires", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-openings-"));
+    dirs.push(dir);
+    let now = 0;
+    const openings = new OpeningBook(join(dir, "conversation-openings.json"), () => {}, () => now);
+    const input = { sendId: SEND, owner: "bot" as const, ownerId: "lead", title: "Plan" };
+    let made = 0;
+    const create = () => ({ threadId: `t${++made}` });
+    expect(await openings.claim(input, create, () => true)).toMatchObject({ threadId: "t1", replayed: false });
+    now = 7 * 24 * 3_600_000 + 1;
+    expect(await openings.claim(input, create, () => true)).toMatchObject({ threadId: "t2", replayed: false });
+    expect(made).toBe(2);
+  });
+
   it("does not open a replacement after the conversation was removed", async () => {
     const { openings } = book();
     await openings.claim({ sendId: SEND, owner: "bot", ownerId: "lead", title: "Plan" }, () => ({ threadId: "gone" }), () => true);
