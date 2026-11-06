@@ -1248,7 +1248,7 @@ export function vpsContainerMcpArgs(alias: string, containerName: string): strin
   );
 }
 
-export function vpsComputerMcp(cfg: AppConfig, botId: string, containerRef?: string): {
+export function vpsComputerMcp(cfg: AppConfig, botId: string, containerRef?: string, reconnect = false): {
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -1258,7 +1258,7 @@ export function vpsComputerMcp(cfg: AppConfig, botId: string, containerRef?: str
   return {
     command: process.execPath,
     args: [SPAWNED_PROXIES.vpsContainerMcp, alias, containerRef ?? vpsContainerName(botId)],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    env: { ELECTRON_RUN_AS_NODE: "1", ...(reconnect ? { OMB_VPS_RECONNECT: "1" } : {}) },
   };
 }
 

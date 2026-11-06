@@ -25,6 +25,7 @@ runMcpBridge({
   args,
   env: { ...process.env, PATH: ssh.path },
   label: "VPS Cua Driver",
+  reconnect: process.env.OMB_VPS_RECONNECT === "1",
   // Probe the transport, not the driver: a busy desktop mid-tool-call must never look dead.
   liveness: { command: "docker", args: vpsDockerArgs(sshAlias, ["version", "--format", "{{.Server.Version}}"]) },
   ...(controlUrl && controlToken ? { gate: { url: controlUrl, token: controlToken } } : {}),

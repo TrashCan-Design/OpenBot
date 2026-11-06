@@ -172,6 +172,7 @@ export function ComputerPanel({
     botId: string;
     computer: Bot["computer"];
     cloudBackend: CloudBackend;
+    vpsDesktopMode: "per-bot" | "shared";
     section: string;
   } | null>(null);
   const [resolvedComputerSelection, setResolvedComputerSelection] = useState<{
@@ -189,6 +190,7 @@ export function ComputerPanel({
       && persistedComputerSelection.botId === bot.id
       && persistedComputerSelection.computer === profileBot.computer
       && persistedComputerSelection.cloudBackend === cloudBackend
+      && persistedComputerSelection.vpsDesktopMode === (profileBot.vpsDesktopMode ?? "per-bot")
       && persistedComputerSelection.section === (bot.section?.trim() ?? ""),
   );
   const computerStatusCurrent = Boolean(
@@ -231,6 +233,7 @@ export function ComputerPanel({
       if (persistedBot && !persistedComputerSelectionMatches({
         computer: profileBot.computer,
         cloudBackend,
+        vpsDesktopMode: profileBot.vpsDesktopMode,
         persistedBot,
       })) return;
       if (persistedBot && (persistedBot.section?.trim() ?? "") !== (bot.section?.trim() ?? "")) return;
@@ -238,13 +241,14 @@ export function ComputerPanel({
         botId: bot.id,
         computer: profileBot.computer,
         cloudBackend,
+        vpsDesktopMode: profileBot.vpsDesktopMode ?? "per-bot",
         section: bot.section?.trim() ?? "",
       });
     });
     return () => {
       alive = false;
     };
-  }, [bot.id, profileBot.computer, bot.section, cloudBackend, flushBotPatches]);
+  }, [bot.id, profileBot.computer, profileBot.vpsDesktopMode, bot.section, cloudBackend, flushBotPatches]);
   const [boatState, setBoatState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [previewError, setPreviewError] = useState<Error | string | null>(null);

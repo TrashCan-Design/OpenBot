@@ -5872,7 +5872,7 @@ async function mountBotVps(
   const remote = await (opts.start ? vps.vpsComputerAction("provision", botVpsConfig, desktopId) : vps.inspectVpsForAuto(botVpsConfig, desktopId));
   if (!remote?.ready || !remote.sshAlias) return { problem: remote?.problem ?? null, reachable: remote?.daemonUp === true, outdated: vpsDesktopOutdated(remote) };
   const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
-  const vpsMcp = vps.vpsComputerMcp(targetCfg, desktopId, remote.container_id ?? undefined);
+  const vpsMcp = vps.vpsComputerMcp(targetCfg, desktopId, remote.container_id ?? undefined, bot.vpsDesktopMode === "shared");
   const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation);
   // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
   const vpsCapture = () => vps.vpsComputerScreenshot(targetCfg, desktopId);
@@ -15404,17 +15404,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const alias = currentBot.cloudBackend === "vps" && currentBot.vpsDesktopMode === "shared"
           ? vpsSshAliasForBot(cfg, currentBot) : null;
         if (alias) {
-          const session = auth.kind === "session" ? auth.session.id : "loopback";
-          const cancelled = new AbortController();
-          const onClose = () => cancelled.abort();
-          if (action === "take") res.once("close", onClose);
-          try {
-            const answer = await sharedVpsSeat.respond(alias, action, controlLeaseId, session,
-              boatLifecycleBusyBots.has(sharedVpsOwnerId(alias)) || vps.vpsLifecycleBusy(),
-              () => cancelled.signal.aborted || res.destroyed, cancelled.signal);
-            if (!answer) return;
-            return json(res, answer.status, answer.body);
-          } finally { if (action === "take") res.off("close", onClose); }
+          const answer = await sharedVpsSeat.respondHttp(res, {
+            alias, action, lease: controlLeaseId, session: auth.kind === "session" ? auth.session.id : "loopback",
+            changing: boatLifecycleBusyBots.has(sharedVpsOwnerId(alias)) || vps.vpsLifecycleBusy(),
+            valid: () => {
+              const current = store.bot(bot.id);
+              return current?.cloudBackend === "vps" && current.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, current) === alias &&
+                (auth.kind !== "session" || sessions.isLive(auth.session.id));
+            },
+          });
+          return answer ? json(res, answer.status, answer.body) : undefined;
         }
         if (action === "release") cloudComputerPower.renew(controlKey);
         if (action === "take" && (boatLifecycleBusyBots.has(bot.id) || boatLifecycleBusyBots.has(controlKey))) {

@@ -124,4 +124,79 @@ describe("shared VPS desktop ownership", () => {
     expect(seat.release(alias, person, "session-one")).toBe(true);
     seat.close();
   });
+
+  it("keeps a confirmed seat when a retry's HTTP response closes", async () => {
+    const seat = new SharedVpsSeat(new TurnResources(), new ComputerControl());
+    await seat.take(alias, person, undefined, "one");
+    expect(await seat.respond(alias, "take", person, "one", false, () => true, new AbortController().signal)).toBeNull();
+    expect(seat.owns(alias, person, "one")).toBe(true);
+    seat.close();
+  });
+
+  it("releases a newly acquired seat when nobody received its HTTP response", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    expect(await seat.respond(alias, "take", person, "one", false, () => true, new AbortController().signal)).toBeNull();
+    expect(resources.holder(resource)).toBeUndefined();
+    seat.close();
+  });
+
+  it("handles a hand-back before the take response settles", async () => {
+    const seat = new SharedVpsSeat(new TurnResources(), new ComputerControl());
+    const response = seat.respond(alias, "take", person, "one", false, () => false, new AbortController().signal);
+    seat.release(alias, person, "one");
+    expect((await response)?.status).toBe(409);
+    expect(seat.owns(alias, person, "one")).toBe(false);
+    seat.close();
+  });
+
+  it("does not leave a seat behind if the bot is reconfigured or its session revoked while waiting", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const bot = { threadId: "alpha", generation: "one" };
+    resources.claim(resource, bot);
+    let valid = true;
+    const response = seat.respond(alias, "take", person, "one", false, () => false, new AbortController().signal, () => valid);
+    valid = false;
+    resources.release(bot);
+    expect((await response)?.status).toBe(409);
+    expect(resources.holder(resource)).toBeUndefined();
+    seat.close();
+  });
+
+  it("keeps a successful duplicate response when the acquiring response closes", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const bot = { threadId: "alpha", generation: "one" };
+    resources.claim(resource, bot);
+    const first = seat.respond(alias, "take", person, "one", false, () => true, new AbortController().signal);
+    const second = seat.respond(alias, "take", person, "one", false, () => false, new AbortController().signal);
+    resources.release(bot);
+    expect(await first).toBeNull();
+    expect((await second)?.body.owned).toBe(true);
+    expect(seat.owns(alias, person, "one")).toBe(true);
+    seat.close();
+  });
+
+  it("preserves FIFO when one duplicate waiter is cancelled", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    const alpha = { threadId: "alpha", generation: "one" };
+    const beta = { threadId: "beta", generation: "two" };
+    resources.claim(resource, alpha);
+    const cancel = new AbortController();
+    const first = seat.take(alias, person, cancel.signal, "one");
+    const second = seat.take(alias, person, undefined, "one");
+    resources.startWaiting(resource, beta);
+    cancel.abort();
+    await expect(first).rejects.toThrow(/cancelled/);
+    expect(resources.waiting(resource)).toHaveLength(2);
+    resources.release(alpha);
+    expect(resources.claim(resource, beta)).toBe(false);
+    await second;
+    seat.release(alias, person, "one");
+    expect(resources.claim(resource, beta)).toBe(true);
+    resources.release(beta);
+    seat.close();
+  });
 });

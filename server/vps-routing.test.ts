@@ -325,6 +325,53 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
     expect((await api("GET", `/api/bots/${beta.id}/computer`)).body.container_name).toBe(second.body.container_name);
   }, 30_000);
 
+  it("queues distinct shared bots, cancels a person waiting, and hands the desktop to the next bot", async () => {
+    await api("PUT", "/api/config", { vps: { sshAlias: "production-vps" } });
+    const alpha = (await api("POST", "/api/bots")).body.bot;
+    const beta = (await api("POST", "/api/bots")).body.bot;
+    for (const [bot, engine] of [[alpha, "vps"], [beta, "asker"]] as const) {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { name: engine, computer: "cloud", cloudBackend: "vps", vpsDesktopMode: "shared", modelSelection: { instanceId: engine, model: "fake-model" } })).status).toBe(200);
+    }
+    for (const path of [gateFile, askerGate, `${acpDump}.mcp.json`, `${askerDump}.mcp.json`]) rmSync(path, { force: true });
+    const first = (await api("POST", `/api/bots/${alpha.id}/tasks`, { title: "Shared first" })).body.task;
+    const second = (await api("POST", `/api/bots/${beta.id}/tasks`, { title: "Shared second" })).body.task;
+    const control = (dump: string) => {
+      const mounts = JSON.parse(readFileSync(`${dump}.mcp.json`, "utf8"));
+      const computer = mounts.find((mount: any) => mount.name === "computer");
+      const value = (name: string) => computer.env.find((entry: any) => entry.name === name)?.value ?? "";
+      expect(value("OMB_VPS_RECONNECT")).toBe("1");
+      return createControlClient({ url: value("OMB_CONTROL_URL"), token: value("OMB_CONTROL_TOKEN") });
+    };
+    try {
+      await api("POST", `/api/bots/${alpha.id}/messages`, { threadId: first.threadId, text: "Use the shared desktop" });
+      await until(async () => existsSync(`${acpDump}.mcp.json`), "the first shared bot mount");
+      const firstControl = control(acpDump);
+      expect(await firstControl.state(true)).toMatchObject({ held: false });
+      await api("POST", `/api/bots/${beta.id}/messages`, { threadId: second.threadId, text: "Work, then use the shared desktop" });
+      await until(async () => existsSync(`${askerDump}.mcp.json`), "the second shared bot mount");
+      const secondControl = control(askerDump);
+      expect(await secondControl.state(true)).toMatchObject({ held: true, blockedReason: CONTROL_BUSY });
+      const queued = (await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop;
+      expect(queued.activeBot.id).toBe(alpha.id);
+      expect(queued.waitingQueue.map((entry: any) => entry.id)).toContain(beta.id);
+      const cancel = new AbortController();
+      const person = fetch(`${BASE}/api/bots/${alpha.id}/computer/control`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "take", controlLeaseId: "queued-person-lease-1234" }), signal: cancel.signal }).catch(() => null);
+      await until(async () => (await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop.waitingQueue.some((entry: any) => entry.id === "person"), "the person's queued control request");
+      cancel.abort(); await person;
+      await until(async () => !(await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop.waitingQueue.some((entry: any) => entry.id === "person"), "cancelled person leaving the queue");
+      await api("POST", `/api/bots/${alpha.id}/interrupt`, { threadId: first.threadId });
+      await until(async () => (await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop.activeBot?.id === beta.id, "the next shared bot acquiring the desktop");
+      const resumed = await secondControl.state(true);
+      expect(resumed, JSON.stringify(resumed)).toMatchObject({ held: false });
+      expect((await api("GET", `/api/bots/${beta.id}/computer`)).body.sharedDesktop.activeBot.id).toBe(beta.id);
+      expect(await firstControl.state(true)).toMatchObject({ held: true });
+    } finally {
+      writeFileSync(gateFile, "open"); writeFileSync(askerGate, "open");
+      await api("POST", `/api/bots/${alpha.id}/interrupt`, { threadId: first.threadId });
+      await api("POST", `/api/bots/${beta.id}/interrupt`, { threadId: second.threadId });
+    }
+  }, 60_000);
+
   it.each([
     {
       settings: "customized resources and operator restart",
@@ -846,6 +893,13 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
       expect((await botById(alpha.id)).vpsAlias).toBe("alpha-vps");
 
       // A bot with no computer of its own chooses a server freely, then falls back to the default.
+      expect((await api("PATCH", `/api/bots/${alpha.id}`, { vpsDesktopMode: "shared" })).status).toBe(200);
+      writeFileSync(dockerLog, "");
+      expect((await api("PATCH", `/api/bots/${alpha.id}`, { vpsAlias: "gamma-vps" })).status).toBe(409);
+      expect((await api("PATCH", `/api/bots/${alpha.id}`, { vpsAlias: null })).status).toBe(409);
+      expect(new Set(hosts())).toEqual(new Set(["alpha-vps"]));
+      expect((await api("PATCH", `/api/bots/${alpha.id}`, { vpsDesktopMode: "per-bot" })).status).toBe(200);
+
       expect((await api("PATCH", `/api/bots/${free.id}`, { vpsAlias: "gamma-vps" })).status).toBe(200);
       expect((await botById(free.id)).vpsAlias).toBe("gamma-vps");
       expect((await api("PATCH", `/api/bots/${free.id}`, { vpsAlias: null })).status).toBe(200);

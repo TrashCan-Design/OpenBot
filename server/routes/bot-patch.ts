@@ -399,7 +399,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       // Moving a bot to another server is refused while its own computer still lives on the old one.
       // Resolved hosts, not raw text: pinning a bot to the server it already uses moves nothing.
       let vpsLeftOn: string | null = null;
-      const perBotAlias = (bot: { vpsAlias?: string }) => vpsSshAliasForBot(cfg, bot);
+      const perBotAlias = (bot: { vpsAlias?: string }) => vpsSshAliasForBot(cfg, { vpsAlias: bot.vpsAlias });
       if (body.vpsAlias !== undefined && existingBot &&
           perBotAlias({ vpsAlias: patch.vpsAlias as string | undefined }) !== perBotAlias(existingBot)) {
         // The scan awaits on SSH; a turn can start or another PATCH can land mid-scan, so every attempt
@@ -661,6 +661,10 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         sectionKey(existingBot?.section) !== sectionKey(section);
       let bot: BotRecord | null;
       const freshBrowserBot = store.bot(m[1]);
+      if (freshBrowserBot && patch.vpsDesktopMode !== undefined && patch.vpsDesktopMode !== (freshBrowserBot.vpsDesktopMode ?? "per-bot") &&
+          (freshBrowserBot.busy || activeVpsThreads.has(m[1]) || vps.vpsLifecycleBusy() || deps.sharedVpsControlHeld?.(freshBrowserBot))) {
+        return json(res, 409, { error: "Stop this bot's VPS turn and release control before changing desktop mode" });
+      }
       // Rechecked: the awaits above can yield after the first memory check.
       if (freshBrowserBot && body.memoryEnabled !== undefined &&
           body.memoryEnabled !== (freshBrowserBot.memoryEnabled !== false) &&

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
+import { ReconnectingMcp, type McpProcess } from "./mcp-reconnect.ts";
 import { CONTROL_ACT_WITHIN_MS, CONTROL_UNCONFIRMED, CONTROL_WAITED, controlRefusal, createControlClient, type ControlState } from "./control-client.ts";
 import { augmentedPath, resolveCliSpawn } from "./env-path.ts";
 import { textOnlyErrorResultLine } from "./mcp-error-result.ts";
@@ -109,6 +110,7 @@ export interface BridgeOptions {
   args: string[];
   env?: NodeJS.ProcessEnv;
   label: string;
+  reconnect?: boolean;
   /** docker's ssh connection helper takes no ConnectTimeout/ServerAlive options, so a dropped VPS wedges silently without this. */
   liveness?: BridgeLiveness;
   /** `describe`: what a tools/call would open, passed to the gate so the person can be asked in plain words. */
@@ -310,7 +312,7 @@ export function createChildCalls(write: (line: string) => void) {
 export function runMcpBridge(options: BridgeOptions): void {
   const env = options.env ?? { ...process.env, PATH: augmentedPath() };
   const { command, args } = resolveCliSpawn(options.command, options.args, env);
-  const child = spawn(command, args, {
+  const child: McpProcess = options.reconnect ? new ReconnectingMcp(command, args, env) : spawn(command, args, {
     shell: false,
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -395,6 +397,7 @@ export function runMcpBridge(options: BridgeOptions): void {
       inactivityMs: BRIDGE_INACTIVITY_MS,
       probe: () => runLivenessProbe(liveness, PROBE_TIMEOUT_MS, options.env),
       onDead: () => {
+        if (child instanceof ReconnectingMcp) { child.reconnect(); return; }
         process.stderr.write(
           `${options.label} transport went silent and stopped answering liveness probes; ending the bridge\n`,
         );

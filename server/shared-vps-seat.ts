@@ -1,3 +1,4 @@
+import type { ServerResponse } from "node:http";
 import type { ComputerControl } from "./computer-control.ts";
 import { sharedVpsControlKey, sharedVpsResource } from "./shared-vps.ts";
 import { TurnResources, type TurnOwner } from "./turn-resources.ts";
@@ -5,11 +6,13 @@ import { TurnResources, type TurnOwner } from "./turn-resources.ts";
 const TAKE_TIMEOUT_MS = 120_000;
 const LEASE_IDLE_MS = 10 * 60_000;
 
-type Seat = { owner: TurnOwner; session: string; timer: ReturnType<typeof setTimeout> };
+type Seat = { owner: TurnOwner; session: string; confirmed: boolean; timer: ReturnType<typeof setTimeout> };
 
 /** Shared VPS person control participates in the same FIFO desktop queue as bot turns. */
 export class SharedVpsSeat {
   private readonly seats = new Map<string, Seat>();
+  private readonly waitRequests = new Map<string, number>();
+  private readonly responses = new Map<string, number>();
   private readonly resources: TurnResources;
   private readonly control: ComputerControl;
   private readonly onRelease: (alias: string) => void;
@@ -20,13 +23,18 @@ export class SharedVpsSeat {
     this.onRelease = onRelease;
   }
 
-  private owner(alias: string, lease: string): TurnOwner {
-    return { threadId: `shared-vps-person:${alias}`, generation: lease };
+  private owner(alias: string, lease: string, session: string): TurnOwner {
+    return { threadId: `shared-vps-person:${alias}:${session}`, generation: lease };
+  }
+
+  private requestKey(alias: string, lease: string, session: string): string {
+    return JSON.stringify([alias, lease, session]);
   }
 
   owns(alias: string, lease: string, session?: string): boolean {
     if (session && this.seats.get(alias)?.session !== session) return false;
-    return this.resources.owns(sharedVpsResource(alias), this.owner(alias, lease)) &&
+    const ownerSession = session ?? this.seats.get(alias)?.session;
+    return Boolean(ownerSession && this.resources.owns(sharedVpsResource(alias), this.owner(alias, lease, ownerSession))) &&
       this.control.ownsLease(sharedVpsControlKey(alias), lease);
   }
 
@@ -49,8 +57,9 @@ export class SharedVpsSeat {
     if (seat) this.touch(alias, seat.owner.generation);
   }
 
-  async take(alias: string, lease: string, signal?: AbortSignal, session = "loopback"): Promise<{ held: boolean; owned: boolean; acquired: boolean }> {
+  async take(alias: string, lease: string, signal?: AbortSignal, session = "loopback", provisional = false): Promise<{ held: boolean; owned: boolean; acquired: boolean }> {
     if (this.owns(alias, lease, session)) {
+      if (!provisional) this.seats.get(alias)!.confirmed = true;
       this.touch(alias, lease);
       return { held: true, owned: true, acquired: false };
     }
@@ -58,14 +67,19 @@ export class SharedVpsSeat {
       throw Object.assign(new Error("The shared desktop is controlled by another session"), { status: 409 });
     }
     const resource = sharedVpsResource(alias);
-    const owner = this.owner(alias, lease);
+    const owner = this.owner(alias, lease, session);
+    const requestKey = this.requestKey(alias, lease, session);
     const deadline = Date.now() + TAKE_TIMEOUT_MS;
+    this.waitRequests.set(requestKey, (this.waitRequests.get(requestKey) ?? 0) + 1);
     this.resources.startWaiting(resource, owner);
     // Release only a claim this attempt made and did not keep. Another take of this lease matches by id, not by this object.
     let releaseClaim = false;
     try {
       while (Date.now() < deadline && !signal?.aborted) {
-        if (this.owns(alias, lease, session)) return { held: true, owned: true, acquired: false };
+        if (this.owns(alias, lease, session)) {
+          if (!provisional) this.seats.get(alias)!.confirmed = true;
+          return { held: true, owned: true, acquired: false };
+        }
         if (this.control.snapshot(sharedVpsControlKey(alias)).held) {
           throw Object.assign(new Error("The shared desktop is controlled by another session"), { status: 409 });
         }
@@ -76,7 +90,7 @@ export class SharedVpsSeat {
           if (!acquired.owned) break;
           const timer = setTimeout(() => this.release(alias, lease), LEASE_IDLE_MS);
           timer.unref?.();
-          this.seats.set(alias, { owner, session, timer });
+          this.seats.set(alias, { owner, session, confirmed: !provisional, timer });
           releaseClaim = false;
           return { held: true, owned: true, acquired: acquired.acquired };
         }
@@ -89,22 +103,39 @@ export class SharedVpsSeat {
       }
       throw Object.assign(new Error(signal?.aborted ? "Desktop control request cancelled" : "Timed out waiting for the shared desktop"), { status: signal?.aborted ? 499 : 409 });
     } finally {
-      this.resources.stopWaiting(resource, owner);
+      const requests = (this.waitRequests.get(requestKey) ?? 1) - 1;
+      if (requests) this.waitRequests.set(requestKey, requests);
+      else {
+        this.waitRequests.delete(requestKey);
+        this.resources.stopWaiting(resource, owner);
+      }
       if (releaseClaim) this.resources.releaseOne(resource, owner);
     }
   }
 
-  async respond(alias: string, action: string, lease: string | undefined, session: string, changing: boolean, closed: () => boolean, signal: AbortSignal): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  async respond(alias: string, action: string, lease: string | undefined, session: string, changing: boolean, closed: () => boolean, signal: AbortSignal, valid: () => boolean = () => true): Promise<{ status: number; body: Record<string, unknown> } | null> {
     const key = sharedVpsControlKey(alias);
     if (action === "take") {
       if (!lease) return { status: 400, body: { error: "Shared desktop control requires a control lease" } };
       if (changing) return { status: 409, body: { error: "The shared VPS desktop is being changed; wait before taking control" } };
-      const result = await this.take(alias, lease, signal, session);
-      if (signal.aborted || closed()) {
-        this.release(alias, lease, session);
-        return null;
+      const requestKey = this.requestKey(alias, lease, session);
+      this.responses.set(requestKey, (this.responses.get(requestKey) ?? 0) + 1);
+      try {
+        const result = await this.take(alias, lease, signal, session, true);
+        if (signal.aborted || closed()) return null;
+        if (!valid()) return { status: 409, body: { error: "The shared desktop selection or session changed while waiting" } };
+        if (!this.owns(alias, lease, session)) return { status: 409, body: { error: "This desktop control request was superseded" } };
+        this.seats.get(alias)!.confirmed = true;
+        return { status: 200, body: { ...this.control.snapshot(key), ...result } };
+      } finally {
+        const pending = (this.responses.get(requestKey) ?? 1) - 1;
+        if (pending) this.responses.set(requestKey, pending);
+        else {
+          this.responses.delete(requestKey);
+          const seat = this.seats.get(alias);
+          if (seat && !seat.confirmed && seat.session === session && seat.owner.generation === lease) this.release(alias, lease, session);
+        }
       }
-      return { status: 200, body: { ...this.control.snapshot(key), ...result } };
     }
     if (action === "release") {
       const released = this.release(alias, lease, session);
@@ -115,6 +146,18 @@ export class SharedVpsSeat {
       return { status: 200, body: { ...this.control.snapshot(key), owned: this.owns(alias, lease, session) } };
     }
     return { status: 400, body: { error: "action must be take, release, or check" } };
+  }
+
+  async respondHttp(res: ServerResponse, input: {
+    alias: string; action: string; lease?: string; session: string; changing: boolean; valid: () => boolean;
+  }): Promise<{ status: number; body: Record<string, unknown> } | null> {
+    const cancelled = new AbortController();
+    const onClose = () => cancelled.abort();
+    if (input.action === "take") res.once("close", onClose);
+    try {
+      return await this.respond(input.alias, input.action, input.lease, input.session, input.changing,
+        () => cancelled.signal.aborted || res.destroyed, cancelled.signal, input.valid);
+    } finally { if (input.action === "take") res.off("close", onClose); }
   }
 
   release(alias: string, lease?: string, session?: string): boolean {
