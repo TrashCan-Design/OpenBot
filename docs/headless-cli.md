@@ -72,7 +72,7 @@ one of its conversations.
 | `doctor [--wait 2m]` | Checks the server answers, is new enough, who you are to it (and when your session expires), that an engine is ready, and whether bots have a browser. |
 | `bots`, `channels`, `models` | Your bots and what each is doing, your rooms, the engines and the models each offers. |
 | `messages TARGET [--limit 30]` | The latest messages of a conversation. |
-| `send TARGET TEXT` | Sends one message and returns at once. `--send-id ID` makes a retry safe: the same id never sends twice. |
+| `send TARGET TEXT` | Sends one message and returns at once. `--task current` (the default) uses the open conversation, `--task new` starts one (titled by `--title` or the first line), and `--task ID` selects that conversation. The reply names the conversation. `--send-id ID` makes a retry safe: the same id never sends twice. |
 | `run TARGET TEXT` | Gives a bot or room one job and waits until it is done (below). |
 | `wait TARGET` | Waits on work already running. |
 | `interrupt TARGET [--tree]` | Presses Stop. `--tree` also stops every teammate still working on its job, in that teammate's own conversation. |
