@@ -39,6 +39,7 @@ import { defaultSetupIo, SetupCancelled, type SetupIo } from "./cli-prompts.ts";
 import { HEADLESS_VERB_NAMES, USAGE } from "./cli-usage.ts";
 import { normalizePhoneOrigin, phonePairingInstructions, runPhoneSetup } from "./cli-phone-setup.ts";
 import { browserSignInLines, pairingBlock } from "./cli-pairing.ts";
+import { parseDuration } from "./headless/args.ts";
 import type { AppConfig } from "./config.ts";
 import {
   cleanupTunnelOrigin,
@@ -108,6 +109,8 @@ export interface CliOptions {
   open?: boolean;
   guided?: boolean;
   phone?: "ios" | "android";
+  /** `pair --ttl 24h`: how long the code stays open. */
+  pairTtlMs?: number;
 }
 
 const COMMANDS = ["setup", "start", "serve", "pair", "sessions", "status", "login", "logout", "access", "service", "browser", "fleet", "help", "--help", "-h"];
@@ -156,6 +159,10 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
         const kind = value().toLowerCase();
         if (kind !== "ios" && kind !== "android") return { error: "--phone takes ios or android" };
         options.phone = kind;
+      }
+      else if (options.command === "pair" && arg === "--ttl") {
+        try { options.pairTtlMs = parseDuration(value(), "--ttl", { min: 60_000 }); }
+        catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
       }
       else if (arg === "--no-pair") options.pair = false;
       else if (arg === "--no-open") options.open = false;
@@ -345,10 +352,8 @@ async function showPhonePairing(options: CliOptions, origin: string | undefined,
   return true;
 }
 
-async function mintPairing(port: number, options: { label?: string; client?: boolean; publicUrl?: string; phone?: "ios" | "android"; guided?: boolean }): Promise<string> {
-  const request: { label?: string; scopes?: string[] } = {};
-  if (options.label) request.label = options.label;
-  if (options.client) request.scopes = ["client"];
+async function mintPairing(port: number, options: { label?: string; client?: boolean; publicUrl?: string; phone?: "ios" | "android"; guided?: boolean; ttlMs?: number }): Promise<string> {
+  const request = { ...(options.label ? { label: options.label } : {}), ...(options.client ? { scopes: ["client"] } : {}), ...(options.ttlMs ? { ttlMs: options.ttlMs } : {}) };
   const { status, body } = await api(port, "/api/auth/pairing", { method: "POST", body: JSON.stringify(request) });
   if (refusedAsService(status, body)) throw new Error(SERVICE_TRUST_HELP);
   if (status !== 200) throw new Error(`server refused to mint a pairing code: ${typeof body?.error === "string" ? body.error : status}`);
@@ -366,7 +371,7 @@ export async function runPair(options: CliOptions): Promise<number> {
     console.error(`no OpenBot server on http://127.0.0.1:${options.port}; start one with \`openmausbot serve\` or set OMB_PORT`);
     return 1;
   }
-  if (process.stdin.isTTY && process.stdout.isTTY && !options.label && !options.client) {
+  if (process.stdin.isTTY && process.stdout.isTTY && !options.label && !options.client && !options.pairTtlMs) {
     const advertised = await api(options.port, "/api/auth/pairing");
     let launch = options;
     let origin = options.publicUrl ?? (typeof advertised.body?.publicUrl === "string" ? advertised.body.publicUrl : undefined);
@@ -397,7 +402,7 @@ export async function runPair(options: CliOptions): Promise<number> {
       return 130;
     }
   }
-  console.log(await mintPairing(options.port, { label: options.label, client: options.client, publicUrl: options.publicUrl, phone: options.phone }));
+  console.log(await mintPairing(options.port, { label: options.label, client: options.client, publicUrl: options.publicUrl, phone: options.phone, ttlMs: options.pairTtlMs }));
   if (options.client) console.log("(client scope: chat and approvals only; cannot change settings or pair others)");
   return 0;
 }
@@ -429,7 +434,7 @@ export async function runSessions(options: CliOptions): Promise<number> {
     console.error(`could not list sessions: ${typeof body?.error === "string" ? body.error : status}`);
     return 1;
   }
-  const sessions: Array<{ id: string; label: string; scopes: string[]; lastSeenAt: number; expiresAt: number }> = Array.isArray(body?.sessions) ? body.sessions : [];
+  const sessions: Array<{ id: string; label: string; scopes: string[]; lastSeenAt: number; expiresAt: number; token?: true }> = Array.isArray(body?.sessions) ? body.sessions : [];
   if (options.json) {
     console.log(JSON.stringify(sessions, null, 2));
     return 0;
@@ -442,12 +447,12 @@ export async function runSessions(options: CliOptions): Promise<number> {
   return 0;
 }
 
-export function formatSessions(sessions: Array<{ id: string; label: string; scopes: string[]; lastSeenAt: number; expiresAt: number }>, now = Date.now()): string {
+export function formatSessions(sessions: Array<{ id: string; label: string; scopes: string[]; lastSeenAt: number; expiresAt: number; token?: true }>, now = Date.now()): string {
   const age = (ms: number) => {
     const m = Math.max(0, Math.floor((now - ms) / 60_000));
     return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
   };
-  const rows = sessions.map((s) => [s.id, s.label || "(unnamed)", s.scopes.includes("admin") ? "admin" : "client", age(s.lastSeenAt), new Date(s.expiresAt).toISOString().slice(0, 10)]);
+  const rows = sessions.map((s) => [s.id, `${s.label || "(unnamed)"}${s.token ? " (token)" : ""}`, s.scopes.includes("admin") ? "admin" : "client", age(s.lastSeenAt), new Date(s.expiresAt).toISOString().slice(0, 10)]);
   const head = ["id", "device", "scope", "last seen", "expires"];
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
   const line = (r: string[]) => r.map((c, i) => c.padEnd(widths[i])).join("  ");

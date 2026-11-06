@@ -81,6 +81,7 @@ one of its conversations.
 | `team apply FILE`, `team export --out FILE` | Makes the workspace match a team file, or writes one (below). |
 | `engine set KIND`, `engine list` | Gives the workspace an engine key without a screen (below). |
 | `connect [URL]` | Gets a token for a workspace elsewhere. |
+| `token create NAME --out FILE` | An access token for CI. It ends on `--expires` (default 90 days, at most the server's session limit), never renews, and is written only to FILE. `token list` and `token revoke ID` never print the token. `--scope client` is the default; a session cannot grant a scope it does not hold. |
 | `new-bot`, `new-channel`, `set-model`, `edit` | Make a bot or a room, change a bot's model, rewrite an earlier message. |
 | `mcp` | The OpenMausBot MCP server on stdin and stdout ([docs/mcp-server.md](mcp-server.md)). |
 

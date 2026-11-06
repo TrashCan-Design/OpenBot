@@ -13,7 +13,9 @@ export function pairingBlock(input: {
   hint?: string | null;
   phone?: "ios" | "android";
 }): string {
-  const lines = [`pairing code:  ${input.code}`, `expires:       ${new Date(input.expiresAt).toLocaleTimeString()} (single use)`];
+  const expires = new Date(input.expiresAt);
+  const when = input.expiresAt - Date.now() > 12 * 3_600_000 ? expires.toLocaleString() : expires.toLocaleTimeString();
+  const lines = [`pairing code:  ${input.code}`, `expires:       ${when} (single use)`];
   if (input.localUrl) lines.push(`this computer: ${input.localUrl}`);
   if (!input.url && !input.inviteUrl) {
     lines.push(`open:          /pair on the address you use for this server, and type the code`);
