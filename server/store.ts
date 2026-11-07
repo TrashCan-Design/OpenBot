@@ -2120,6 +2120,7 @@ export class Store {
     const approval = resetApprovalToAsk ? structuredClone(ASK_NOW) : {};
     const own = sameModelSelection(selection, updateBotDefault ? selection : bot.modelSelection) ? undefined : structuredClone(selection);
     const nextTask = persistedPin({ ...task, ...taskPatch, modelSelection: own, ...approval,
+      ...(task.surfaceSource === "auto" ? { surface: undefined, surfaceSource: undefined } : {}),
       ...(typeof taskPatch.title === "string" ? { title: taskPatch.title.trim().slice(0, 80) || UNTITLED_THREAD } : {}) });
     const others = updateBotDefault ? this.withDefaultModel(bot, selection)! : bot.tasks!;
     const nextTasks = bot.tasks!.map((candidate, index) => candidate === task ? nextTask : others[index]!);

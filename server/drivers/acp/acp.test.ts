@@ -323,7 +323,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("ends a tool call that arrives already finished, so nothing counts it as running", async () => {
     await create(GrokAgentDriver, "finished-tools");
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-finished-tools", text: "go" });
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-finished-tools", text: "send a screenshot" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
     const started = recorder.events.flatMap((e) => e.type === "item.started" && e.itemType === "tool" ? [e.itemId] : []);
     const completed = new Map(recorder.events.flatMap((e) =>
@@ -353,12 +353,19 @@ describe("ACP turns (fake CLI)", () => {
 
   it("completes a finished tool call once, though a later terminal update names it again", async () => {
     await create(GrokAgentDriver, "finished-tools");
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-finished-twice", text: "go" });
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-finished-twice", text: "send a screenshot" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
     const ends = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "tool" && e.itemId === "tc-done");
     expect(ends).toHaveLength(1);
     expect(ends[0]).toMatchObject({ ok: true, output: expect.stringContaining("ok") });
     expect(recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_image")).toHaveLength(1);
+  });
+
+  it("does not attach a tool screenshot the person did not ask for", async () => {
+    await create(GrokAgentDriver, "finished-tools");
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-finished-quiet", text: "go" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+    expect(recorder.events.some((e) => e.type === "item.completed" && e.itemType === "assistant_image")).toBe(false);
   });
 
   it("normalizes a full turn into the canonical event sequence", async () => {
@@ -1787,6 +1794,35 @@ describe("ACP turns (fake CLI)", () => {
     await instance.adapter.respondToRequest("t-always-native", (opened as { requestId: string }).requestId, { behavior: "allow", always: true });
     await recorder.until((e) => e.type === "turn.completed");
     expect(readFileSync(answer, "utf8")).toBe("allow-always");
+  });
+
+  it("keeps a desktop Always allow inside this driver instead of handing it to the agent", async () => {
+    process.env.FAKE_ACP_ALLOW_ALWAYS = "1";
+    process.env.FAKE_ACP_PERMISSION_TOOL_CALL = JSON.stringify({ kind: "other", title: "mcp__computer__click", rawInput: { x: 3, y: 4 } });
+    const answer = join(scratch, "computer-always.txt");
+    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    await create(GrokAgentDriver, "permission");
+    await instance.adapter.sendTurn({ threadId: "t-computer-always", text: "go", approvalMode: "ask" });
+    const opened = await recorder.until((event) => event.type === "request.opened");
+    await instance.adapter.respondToRequest("t-computer-always", (opened as { requestId: string }).requestId, { behavior: "allow", always: true });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(readFileSync(answer, "utf8")).toBe("allow-once");
+    const second = await instance.adapter.sendTurn({ threadId: "t-computer-always", text: "again", approvalMode: "ask", resumeCursor: "fake-acp-session" });
+    await recorder.until((event) => event.type === "turn.completed" && event.turnId === second.turnId);
+    expect(recorder.events.filter((event) => event.type === "request.opened")).toHaveLength(1);
+    expect(readFileSync(answer, "utf8")).toBe("allow-once");
+  });
+
+  it("cancels an open permission when the person stops the turn", async () => {
+    const answer = join(scratch, "permission-stop.txt");
+    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    await create(GrokAgentDriver, "permission");
+    await instance.adapter.sendTurn({ threadId: "t-permission-stop", text: "go", approvalMode: "ask" });
+    await recorder.until((event) => event.type === "request.opened");
+    await instance.adapter.interruptTurn("t-permission-stop");
+    const done = await recorder.until((event) => event.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+    expect(readFileSync(answer, "utf8")).toBe("cancelled");
   });
 
   it("remembers the exact operation for the session when the agent offers no allow_always", async () => {
