@@ -7,6 +7,8 @@ const PREVIOUS_PIDS_LIMIT = 512;
 const raised = new Set<string>();
 const raisedMemory = new Set<string>();
 const deferredMemory = new Map<string, number>();
+const infoRetryAt = new Map<string, number>();
+const INFO_RETRY_MS = 60_000;
 
 export const PER_BOT_VPS_MEMORY = "4g";
 export const SHARED_DESKTOP_MEMORY = "6g";
@@ -41,9 +43,10 @@ export function sharedDesktopMemoryPlan(current: number | null | undefined, host
 
 /** Reads the host total, then updates one shared desktop in place. A lost reply clears the latch. */
 export async function considerSharedDesktopMemory(
-  status: { container_id: string; memoryBytes?: number; memoryHostBytes?: number; memoryDeferred?: boolean },
+  status: { container_id: string | null; memoryBytes?: number; memoryHostBytes?: number; memoryDeferred?: boolean },
   docker: (args: string[], timeoutMs?: number) => Promise<{ stdout?: string }>,
 ): Promise<void> {
+  if (!status.container_id) return;
   const current = status.memoryBytes;
   const deferredHost = deferredMemory.get(status.container_id);
   if (deferredHost !== undefined) {
@@ -52,13 +55,16 @@ export async function considerSharedDesktopMemory(
     return;
   }
   if (typeof current !== "number" || current <= 0 || current >= SHARED_DESKTOP_MEMORY_BYTES || raisedMemory.has(status.container_id)) return;
+  if ((infoRetryAt.get(status.container_id) ?? 0) > Date.now()) return;
   let host: number | null = null;
   try {
     const reported = Number((await docker(["info", "--format", "{{.MemTotal}}"], 10_000)).stdout?.trim());
     host = Number.isFinite(reported) && reported > 0 ? reported : null;
   } catch {
+    infoRetryAt.set(status.container_id, Date.now() + INFO_RETRY_MS);
     return;
   }
+  infoRetryAt.delete(status.container_id);
   status.memoryHostBytes = host ?? undefined;
   const plan = sharedDesktopMemoryPlan(current, host);
   if (plan === "defer" && host !== null) {
@@ -66,7 +72,10 @@ export async function considerSharedDesktopMemory(
     status.memoryDeferred = true;
     return;
   }
-  if (plan !== "raise" || host === null) return;
+  if (plan !== "raise" || host === null) {
+    if (host === null) infoRetryAt.set(status.container_id, Date.now() + INFO_RETRY_MS);
+    return;
+  }
   raisedMemory.add(status.container_id);
   try {
     await docker(["update", "--memory", SHARED_DESKTOP_MEMORY, "--memory-swap", SHARED_DESKTOP_MEMORY, status.container_id], 15_000);

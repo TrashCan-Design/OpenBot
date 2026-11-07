@@ -561,7 +561,8 @@ async function computeVpsComputerStatus(
       labels?.[VPS_CONTAINER_LABEL] === status.container_name &&
       (environmentLabel === undefined || environmentLabel === vpsEnvironmentId());
     if (status.managed && status.container_id) raisePidsLimit(status.container_id, detail?.HostConfig?.PidsLimit, run);
-    if (status.managed && status.container_id && botId.startsWith("openbot-shared-desktop:")) await considerSharedDesktopMemory({ ...status, container_id: status.container_id }, run);
+    const memoryLock = vpsLockKey(cfg, botId);
+    if (status.managed && botId.startsWith("openbot-shared-desktop:") && !(memoryLock && lifecycleLocks.has(memoryLock))) await considerSharedDesktopMemory(status, run);
     status.network = hasNoPublishedPorts(detail?.HostConfig, detail?.NetworkSettings?.Networks) ? "private" : "unsafe";
     status.mounts = hasNoHostMounts(detail ?? {}) ? "none" : "unsafe";
     status.security = dockerSecurityIsHardened(detail?.HostConfig, { restartPolicy: "any" })

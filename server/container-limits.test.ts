@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PER_BOT_VPS_MEMORY,
   SHARED_DESKTOP_HEADROOM_BYTES,
@@ -66,5 +66,29 @@ describe("shared desktop memory", () => {
     failUpdate = false;
     await considerSharedDesktopMemory(status, docker);
     expect(calls.filter((args) => args[0] === "update")).toHaveLength(2);
+  });
+
+  it("waits a minute before rereading a host that did not answer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-07T12:00:00Z"));
+    let reads = 0;
+    const docker = async (args: string[]) => {
+      if (args[0] === "info") {
+        reads += 1;
+        throw new Error("ssh timed out");
+      }
+      return { stdout: "" };
+    };
+    const status = { container_id: "e".repeat(64), memoryBytes: 4 * GiB };
+    try {
+      await considerSharedDesktopMemory(status, docker);
+      await considerSharedDesktopMemory(status, docker);
+      expect(reads).toBe(1);
+      vi.setSystemTime(new Date("2026-11-07T12:01:01Z"));
+      await considerSharedDesktopMemory(status, docker);
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

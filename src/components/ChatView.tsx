@@ -687,7 +687,7 @@ const MessagesList = memo(function MessagesList({
 }) {
   const { botId, threadId, botName, botColor, bots, busy, hasMore, focus, showToolCalls, locale, simple = false } = useChatRows();
   // A turn's narration and finished tools sit in one Thinking section. The answer stays outside it.
-  const items = useMemo(() => groupTranscript(messages), [messages, locale]);
+  const items = useMemo(() => groupTranscript(messages, busy), [messages, locale, busy]);
   const newestMessageId = messages.at(-1)?.id;
   let newestUserMessageId: string | undefined;
   for (let i = messages.length - 1; i >= 0 && !newestUserMessageId; i--) {

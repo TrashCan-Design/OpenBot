@@ -56,7 +56,7 @@ import { appendNative } from "../native.ts";
 import { acpSessionOperationKey, acpShellRequest, answersAlone, permissionLaunchCwd } from "../permission-command.ts"; import { acpReadPaths } from "../../own-file-reads.ts";
 import { openQuestionRequest, questionRequestFor, type AcpQuestionRequest } from "./question-requests.ts";
 import { commandSummary, toolDetailPreview } from "../../tool-summary.ts";
-import { acpToolEndEvents } from "./tool-items.ts";
+import { acpToolEndEvents } from "./tool-items.ts"; import { screenshotWasRequested } from "../../screenshot-request.ts";
 import { AcpHost } from "./host.ts";
 import { endTurn, trackRunningTool, type AcpAskFinish, type AcpSession, type AcpTurn } from "./turn-state.ts";
 import { recoveryPromptFor } from "../../resume-recovery.ts";
@@ -881,7 +881,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const finished = u.status === "completed" || u.status === "failed";
           const toolEnded = (itemId: string | undefined) => {
             current.state.producedItem = true;
-            for (const event of acpToolEndEvents(u, itemId, current.endedToolIds)) emit({ ...base(threadId, current.turnId), ...event });
+            for (const event of acpToolEndEvents(u, itemId, current.endedToolIds, screenshotWasRequested([{ role: "user", text: current.turn.text }]))) emit({ ...base(threadId, current.turnId), ...event });
           };
           switch (u.sessionUpdate) {
             case "agent_message_chunk": {
@@ -1511,7 +1511,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             const reason = result?.stopReason;
             if (reason === "end_turn") settle(threadId, session, true, null);
-            else if (reason === "cancelled" || state.stopped) settle(threadId, session, true, "cancelled");
+            else if (reason === "cancelled" || state.stopped) settle(threadId, session, state.stopped, "cancelled");
             else {
               const errorMessage = typeof result?.error === "string" && result.error
                 ? result.error

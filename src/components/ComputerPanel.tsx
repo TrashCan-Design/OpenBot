@@ -143,6 +143,7 @@ export function ComputerPanel({
   const livePlace = effectivePlace(profileBot, liveTask);
   const threadBot = currentTaskBot(profileBot);
   const connectionKey = `${profileBot.id}:${profileBot.threadId}:${livePlace}:${profileBot.cloudBackend ?? "box"}:${profileBot.vpsDesktopMode ?? "per-bot"}`;
+  const surfaceQueryKey = `${connectionKey}:${threadBot.modelSelection.instanceId}:${threadBot.modelSelection.model ?? ""}`;
   const [autoSurface, setAutoSurface] = useState<{ key: string; surface: Bot["computer"] } | null>(null);
   const autoSurfaceCurrent = autoSurface?.key === connectionKey;
   const surfaceReady = livePlace !== "auto" || autoSurfaceCurrent;
@@ -283,7 +284,6 @@ export function ComputerPanel({
   useEffect(() => {
     if (livePlace !== "auto" || !computerSelectionPersisted) return;
     const controller = new AbortController();
-    setAutoSurface(null);
     void api(threadPath("computer"), { signal: controller.signal }).then((status) => {
       if (controller.signal.aborted) return;
       const surface = status.surface;
@@ -296,7 +296,7 @@ export function ComputerPanel({
       setPhase("error");
     });
     return () => controller.abort();
-  }, [connectionKey, livePlace, computerSelectionPersisted, threadPath, retry]);
+  }, [surfaceQueryKey, connectionKey, livePlace, computerSelectionPersisted, threadPath, retry]);
   const vmResumable = phase === "vm-unavailable" && vmStatus?.resumable === true;
   const vmReadinessAttempts = useRef(0);
   const vmActionController = useRef<AbortController | null>(null);

@@ -291,6 +291,13 @@ describe("groupTranscript", () => {
     expect(items).toMatchObject([{ kind: "turn", label: "Thinking…", messages: [first, second] }]);
   });
 
+  it("shows the text of a turn that stopped without a final marker", () => {
+    const first = assistant("Here is the answer.", "turn-stopped");
+    const second = assistant("And the rest.", "turn-stopped");
+    const items = groupTranscript([first, second], false);
+    expect(items.map((item) => item.kind === "message" ? item.message.id : item.kind)).toEqual([first.id, second.id]);
+  });
+
   it("keeps an attached image outside Thinking", () => {
     const note = assistant("Saving the chart.", "turn-file");
     const file = { ...assistant("", "turn-file"), attachments: [{ kind: "image" as const, path: "chart.png", mime: "image/png" }] };

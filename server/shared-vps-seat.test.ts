@@ -261,6 +261,34 @@ describe("shared VPS desktop ownership", () => {
     seat.close();
   });
 
+  it("keeps the owner's look when another bot looks, and frees a result that never comes back", async () => {
+    vi.useFakeTimers();
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    try {
+      const alpha = { threadId: "alpha", generation: "one" };
+      const beta = { threadId: "beta", generation: "two" };
+      resources.claim(resource, alpha);
+      seat.note(alias, "alpha:one");
+      seat.note(alias, "beta:two");
+      expect(seat.admit(alias, "alpha:one")).toBe("ok");
+      resources.release(alpha);
+      expect(seat.recovering(alias)).toBe(true);
+      vi.advanceTimersByTime(45_000);
+      expect(seat.recovering(alias)).toBe(false);
+      expect(resources.holder(resource)).toBeUndefined();
+      resources.claim(resource, beta);
+      expect(seat.admit(alias, "beta:two")).toBe("stale");
+      seat.note(alias, "beta:two");
+      expect(seat.admit(alias, "beta:two")).toBe("ok");
+      seat.finish(alias, "beta:two");
+      resources.release(beta);
+    } finally {
+      seat.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("releases only the revoked session's seat", async () => {
     const resources = new TurnResources();
     const seat = new SharedVpsSeat(resources, new ComputerControl());

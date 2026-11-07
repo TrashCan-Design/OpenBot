@@ -1,34 +1,49 @@
-const INPUT_TOOLS = new Set([
-  "type_text", "press_key", "hotkey", "scroll", "click", "double_click", "right_click", "drag", "move",
-]);
+const KEY_TOOLS = new Set(["type_text", "press_key", "hotkey", "scroll"]);
+const POINTER_TOOLS = new Set(["click", "double_click", "right_click", "drag"]);
 
 const NOTE = "OpenBot desktop input:";
+const inputCalls = new Set<string>();
+
+function argumentsOf(params: { arguments?: unknown } | undefined): Record<string, unknown> {
+  const current = params?.arguments;
+  return current && typeof current === "object" && !Array.isArray(current) ? { ...current as Record<string, unknown> } : {};
+}
+
+function targetsPixels(name: string, args: Record<string, unknown>): boolean {
+  if (KEY_TOOLS.has(name) || name === "drag") return true;
+  return typeof args.x === "number" && typeof args.y === "number";
+}
 
 /** The Linux sandbox has no background keyboard. Foreground stays inside that desktop. */
 export function foregroundSandboxInput(line: string): string {
-  let frame: { method?: unknown; params?: { name?: unknown; arguments?: unknown } };
+  let frame: { id?: unknown; method?: unknown; params?: { name?: unknown; arguments?: unknown } };
   try {
     frame = JSON.parse(line) as typeof frame;
   } catch {
     return line;
   }
-  if (frame.method !== "tools/call" || !frame.params || typeof frame.params.name !== "string" || !INPUT_TOOLS.has(frame.params.name)) return line;
-  const current = frame.params.arguments;
-  const args = current && typeof current === "object" && !Array.isArray(current) ? { ...current as Record<string, unknown> } : {};
-  if (args.delivery_mode === "foreground") return line;
+  const name = frame.params?.name;
+  if (frame.method !== "tools/call" || typeof name !== "string" || (!KEY_TOOLS.has(name) && !POINTER_TOOLS.has(name))) return line;
+  if (frame.id !== undefined && frame.id !== null) {
+    if (inputCalls.size > 200) inputCalls.clear();
+    inputCalls.add(String(frame.id));
+  }
+  const args = argumentsOf(frame.params);
+  if (!targetsPixels(name, args) || args.delivery_mode === "foreground") return line;
   args.delivery_mode = "foreground";
-  frame.params.arguments = args;
+  frame.params = { ...frame.params, arguments: args };
   return JSON.stringify(frame);
 }
 
 /** A confirmed no-op may be recovered once. A timeout may already have landed, so it is not replayed. */
 export function annotateSandboxInputResult(line: string): string {
-  let frame: { result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } };
+  let frame: { id?: unknown; result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } };
   try {
     frame = JSON.parse(line) as typeof frame;
   } catch {
     return line;
   }
+  if (frame.id === undefined || frame.id === null || !inputCalls.delete(String(frame.id))) return line;
   const content = frame.result?.content;
   if (!Array.isArray(content)) return line;
   const text = content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");

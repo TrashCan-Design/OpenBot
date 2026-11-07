@@ -600,7 +600,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
           settle(false, "failed", endUsage);
           return;
         }
-        settle(true, sr === "cancelled" || sr === "aborted" ? "cancelled" : "end_turn", endUsage);
+        settle(sr !== "length", sr === "cancelled" || sr === "aborted" ? "cancelled" : sr === "length" ? "max_tokens" : "end_turn", endUsage);
       };
 
       const stop = () => {
@@ -841,7 +841,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
         sessionReady = true;
         sessionOpened = true;
       } catch {
-        // pi --no-session accepts a prompt without an explicit session.
+        emit({ ...base(threadId, turnId), type: "runtime.notice", message: "Pi could not reopen the saved session, so this turn starts without it." });
       }
       if (settled) return { turnId };
 

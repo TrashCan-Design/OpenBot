@@ -5,6 +5,8 @@ import { TurnResources, type TurnOwner } from "./turn-resources.ts";
 
 const TAKE_TIMEOUT_MS = 120_000;
 const LEASE_IDLE_MS = 10 * 60_000;
+/** A click's result normally arrives over SSH within a few seconds. Past this, the bridge will not report it. */
+const INFLIGHT_ABANDON_MS = 45_000;
 
 type Seat = { owner: TurnOwner; session: string; confirmed: boolean; timer: ReturnType<typeof setTimeout> };
 
@@ -16,7 +18,8 @@ export class SharedVpsSeat {
   private readonly inflightOwners = new Map<string, string[]>();
   private readonly draining = new Set<string>();
   private readonly epoch = new Map<string, number>();
-  private readonly seen = new Map<string, { epoch: number; owner: string }>();
+  private readonly seen = new Map<string, Map<string, number>>();
+  private readonly abandonTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly resources: TurnResources;
   private readonly control: ComputerControl;
   private readonly onRelease: (alias: string) => void;
@@ -179,17 +182,18 @@ export class SharedVpsSeat {
     const holder = this.resources.holder(sharedVpsResource(alias));
     const heldByCaller = Boolean(holder && `${holder.threadId}:${holder.generation}` === owner);
     if (this.draining.has(alias) || this.recovering(alias) || !heldByCaller) return "recovering";
-    const seen = this.seen.get(alias);
-    if (!seen || seen.epoch !== (this.epoch.get(alias) ?? 0) || seen.owner !== owner) return "stale";
+    if (this.seen.get(alias)?.get(owner) !== (this.epoch.get(alias) ?? 0)) return "stale";
     const owners = this.inflightOwners.get(alias) ?? [];
     owners.push(owner);
     this.inflightOwners.set(alias, owners);
     return "ok";
   }
 
-  /** Records a successful get_desktop_state for this owner. It does not take, queue, or renew control. */
+  /** Records a successful get_desktop_state for this owner. Another owner's look does not replace it. */
   note(alias: string, owner: string): void {
-    this.seen.set(alias, { epoch: this.epoch.get(alias) ?? 0, owner });
+    let owners = this.seen.get(alias);
+    if (!owners) this.seen.set(alias, owners = new Map());
+    owners.set(owner, this.epoch.get(alias) ?? 0);
   }
 
   finish(alias: string, owner: string): void {
@@ -200,6 +204,7 @@ export class SharedVpsSeat {
     if (owners.length) this.inflightOwners.set(alias, owners);
     else this.inflightOwners.delete(alias);
     if (owners.length) return;
+    this.clearAbandon(alias);
     const recovery = this.recoveryOwner(alias);
     if (this.resources.owns(sharedVpsResource(alias), recovery)) {
       this.draining.delete(alias);
@@ -247,6 +252,37 @@ export class SharedVpsSeat {
     this.seen.delete(alias);
   }
 
+  private armAbandon(alias: string): void {
+    if (this.abandonTimers.has(alias)) return;
+    const timer = setTimeout(() => {
+      this.abandonTimers.delete(alias);
+      this.abandonInflight(alias);
+    }, INFLIGHT_ABANDON_MS);
+    timer.unref?.();
+    this.abandonTimers.set(alias, timer);
+  }
+
+  private clearAbandon(alias: string): void {
+    const timer = this.abandonTimers.get(alias);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.abandonTimers.delete(alias);
+  }
+
+  /** The bridge never reported these calls. Release the desktop; the next owner must look again. */
+  private abandonInflight(alias: string): void {
+    if (this.pending(alias) === 0) return;
+    this.inflightOwners.delete(alias);
+    const recovery = this.recoveryOwner(alias);
+    if (this.resources.owns(sharedVpsResource(alias), recovery)) {
+      this.draining.delete(alias);
+      this.resources.releaseOne(sharedVpsResource(alias), recovery);
+      this.advance(alias);
+      return;
+    }
+    if (this.draining.has(alias)) this.finishDrain(alias);
+  }
+
   private afterResourceRelease(resource: string, owner: TurnOwner): void {
     if (owner.threadId.startsWith("shared-vps-recovery:")) return;
     const alias = sharedAliasFromResource(resource);
@@ -254,6 +290,7 @@ export class SharedVpsSeat {
     if (this.pending(alias) > 0) {
       this.draining.add(alias);
       this.resources.hold(resource, this.recoveryOwner(alias));
+      this.armAbandon(alias);
       return;
     }
     this.advance(alias);
@@ -270,6 +307,10 @@ export class SharedVpsSeat {
   }
 
   close(): void {
+    for (const alias of Array.from(this.abandonTimers.keys())) {
+      this.clearAbandon(alias);
+      this.abandonInflight(alias);
+    }
     for (const alias of this.seats.keys()) this.release(alias);
   }
 }
