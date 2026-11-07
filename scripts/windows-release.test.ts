@@ -65,6 +65,7 @@ describe("Windows updater release validation", () => {
   it("publishes all assets as a draft before making it latest and checking the anonymous public feed", async () => {
     const f = fixture(), g = github(f.directory); let verified = 0;
     g.noTag();
+    writeFileSync(join(f.directory, "SHA256SUMS.txt"), `${digest(f.bytes)} *${f.exe}\r\n`);
     const url = await publishWindowsRelease({ ...f, version: VERSION, sha: SHA, repository: REPO, gh: g.gh,
       verifyPublic: async () => { verified++; } });
     expect(url).toContain(`/releases/tag/v${VERSION}`);

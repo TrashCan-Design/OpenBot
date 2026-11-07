@@ -50,7 +50,8 @@ export async function publishWindowsRelease({ directory, version, sha, repositor
   if (repository !== REPO || !/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("Unexpected release repository or source commit");
   const bundle = validateWindowsBundle(directory, version);
   if (readFileSync(join(directory, "SOURCE_COMMIT.txt"), "utf8").trim() !== sha) throw new Error("Installer source does not match this workflow commit");
-  if (readFileSync(join(directory, "SHA256SUMS.txt"), "utf8").trim() !== `${bundle.sha256}  ${bundle.exe}`) throw new Error("Installer SHA256SUMS.txt does not match");
+  const checksum = readFileSync(join(directory, "SHA256SUMS.txt"), "utf8").trim();
+  if (![`${bundle.sha256}  ${bundle.exe}`, `${bundle.sha256} *${bundle.exe}`].includes(checksum)) throw new Error("Installer SHA256SUMS.txt does not match");
   const tag = `v${version}`;
   const releases = JSON.parse(gh(["release", "list", "--repo", REPO, "--limit", "100", "--json", "tagName,isDraft,isPrerelease"]));
   for (const release of releases) {
