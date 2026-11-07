@@ -268,3 +268,11 @@ phone-secret, scheduling, reports, loading state, thread links and coordination.
 They are not all cosmetic, and are not marked resolved by a successful package
 build. The installer branch is an artifact build, not an assertion that the full
 suite is green or permission to merge the draft PR into main.
+
+The phone-secret failure was subsequently reproduced as a real interoperability
+regression: rebranding changed the HPKE info string, while the fixed CryptoKit
+version-1 envelope still uses the original domain. Decryption now accepts both
+known version-1 domains with identical AAD/key/request checks. Current-domain,
+legacy CryptoKit and tamper-refusal tests are retained; this is not fixed by
+replacing the original ciphertext fixture. A fresh installer build is required
+to include this correction.

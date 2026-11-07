@@ -42,6 +42,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Windows shared desktop and credential safety
+        run: pnpm exec vitest run server/shared-vps-gateway.test.ts server/shared-vps-seat.test.ts server/shared-vps-host.test.ts server/shared-vps-proxy.test.ts server/phone-secret.test.ts scripts/testing/index-route-ratchet.test.ts
       # the packaged app ships compiled JS, so a stale dist/ or dist-server/
       # would ride along unsigned-for and unsealed (the 0.1.15 "damaged"
       # incident) — a fresh checkout is clean, but be explicit

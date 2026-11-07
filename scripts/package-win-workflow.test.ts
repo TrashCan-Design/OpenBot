@@ -17,6 +17,7 @@ describe("OpenBot Windows artifact build", () => {
     expect(steps.some(step => step.run?.includes("smoke-browser-bundle.mjs"))).toBe(true);
     expect(steps.some(step => step.run?.includes("smoke-packaged-server.mjs"))).toBe(true);
     expect(steps.some(step => step.name === "start the packaged server")).toBe(true);
+    expect(steps.find(step => step.name === "Verify Windows shared desktop and credential safety")?.run).toContain("server/phone-secret.test.ts");
     const verify = steps.find(step => step.name === "verify the packaged tree")!.run!;
     expect(verify).toContain("repo: OpenBot"); expect(verify).toContain("owner: TrashCan-Design");
     expect(verify).toContain("publisherName");

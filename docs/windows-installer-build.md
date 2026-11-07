@@ -15,7 +15,8 @@ workflow are replaced by the current reviewed source tree. No force-push or
 merge into main is needed.
 
 The job builds on windows-latest with a 6 GiB Node heap and a 60-minute deadline.
-It preserves existing browser/server/resource verification, starts the packaged
+It first runs targeted shared-desktop and phone-credential regression tests on
+Windows. It preserves existing browser/server/resource verification, starts the packaged
 server in an isolated home, then uploads windows-installer containing:
 
 - OpenBot-0.1.137-setup.exe
