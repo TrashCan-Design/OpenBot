@@ -312,8 +312,8 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   computer?: Surface | "off";
   /** Which cloud computer backs computer: "cloud"; absent means Boat. */
   cloudBackend?: CloudBackend;
-  /** Auto mode may prepare/start this bot's managed VPS container. */
-  autoStartVps?: boolean;
+  /** Auto mode may prepare this bot's VPS. Shared mode uses one installation desktop on the default SSH host. */
+  autoStartVps?: boolean; vpsDesktopMode?: "per-bot" | "shared";
   /** This bot's own SSH config alias for its managed VPS computer; absent
    * means the default server from Settings → API keys. */
   vpsAlias?: string;

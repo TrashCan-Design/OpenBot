@@ -624,6 +624,8 @@ describe("VPS computer", () => {
     expect(connection.args.slice(-2)).toEqual(["production-vps", vpsContainerName(BOT_ID)]);
     expect(connection.env).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
     expect(vpsComputerMcp(CONFIG, BOT_ID, CONTAINER_ID).args.slice(-2)).toEqual(["production-vps", CONTAINER_ID]);
+    expect(vpsComputerMcp(CONFIG, BOT_ID, CONTAINER_ID).env.OMB_VPS_RECONNECT).toBeUndefined();
+    expect(vpsComputerMcp(CONFIG, BOT_ID, CONTAINER_ID, true).env.OMB_VPS_RECONNECT).toBe("1");
     expect(vpsContainerMcpArgs("production-vps", vpsContainerName(BOT_ID))).toEqual([
       "-H",
       "ssh://production-vps",
