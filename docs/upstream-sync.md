@@ -65,3 +65,12 @@ This build uses the fork's current shared-desktop code and corrects its two
 observed route-ratchet/OpenCode-fixture regressions. It restores the existing
 installer branch's build trigger using package-win.yml instead of copying the
 obsolete fork-windows.yml repository-name checks.
+
+## Windows updater publication — 7 November 2026 (UTC)
+
+Rechecked official upstream main before editing: it remains
+`1bc4749aa8307d7d6998bf86de4ef6478460dd93`, already reviewed above. No new
+upstream fixes are pending in that range. This scoped correction connects the
+fork's successful installer branch to its own GitHub Release feed, shares
+publication validation with the existing main-branch release workflow, and
+adds regression tests. No application feature or vendor service is added.

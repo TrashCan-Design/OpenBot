@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 const workflow = parse(readFileSync(new URL("../.github/workflows/package-win.yml", import.meta.url), "utf8"));
-describe("OpenBot Windows artifact build", () => {
-  it("builds the existing installer branch on Windows without publishing a release", () => {
+describe("OpenBot Windows build and updater release", () => {
+  it("builds the existing installer branch on Windows with a read-only build token", () => {
     expect(workflow.on.push.branches).toEqual(["codex/windows-installer"]);
     expect(workflow.on.workflow_dispatch.inputs.ref.required).toBe(false);
     expect(workflow.permissions).toEqual({ contents: "read" });
@@ -11,6 +11,22 @@ describe("OpenBot Windows artifact build", () => {
     expect(workflow.jobs.package.env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
     expect(workflow.jobs.package.steps.some((step: { run?: string }) => step.run === "pnpm package:win")).toBe(true);
     expect(JSON.stringify(workflow)).not.toContain("gh release");
+    expect(workflow.jobs.package.steps[0].with).toEqual({ ref: "${{ inputs.ref || github.sha }}", "persist-credentials": false });
+  });
+  it("publishes only a successful installer-branch push and serializes stable releases", () => {
+    expect(workflow.concurrency).toEqual({ group: "openbot-windows-release", "cancel-in-progress": false });
+    const publish = workflow.jobs.publish;
+    expect(publish.needs).toBe("package");
+    expect(publish.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-installer' && github.repository == 'TrashCan-Design/OpenBot'");
+    expect(publish.permissions).toEqual({ contents: "write" });
+    expect(publish.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+    expect(publish.steps.find((s: { uses?: string }) => s.uses?.startsWith("actions/download-artifact@"))?.with).toEqual({ name: "windows-installer", path: "release" });
+    expect(publish.steps.at(-1).run).toBe("node scripts/windows-release.mjs publish release");
+    const main = parse(readFileSync(new URL("../.github/workflows/openbot-windows-release.yml", import.meta.url), "utf8"));
+    expect(main.concurrency).toEqual(workflow.concurrency);
+    expect(main.jobs.package.if).toContain("refs/heads/main");
+    expect(main.jobs.package.steps.at(-1).run).toContain("node scripts/windows-release.mjs publish release");
+    expect(workflow.jobs.package.steps.find((s: { name?: string }) => s.name === "Verify updater metadata matches the installer")?.run).toBe("node scripts/windows-release.mjs validate release");
   });
   it("keeps the resource, browser, server and fork updater checks", () => {
     const steps = workflow.jobs.package.steps as Array<{ name?: string; run?: string }>;
