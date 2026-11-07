@@ -83,6 +83,15 @@ function resolveWindowState(state, workAreas, defaults = DEFAULT_BOUNDS) {
   };
 }
 
+const UNREAD_DOT_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAN0lEQVR42mNgGNRANfn1fxAmWyM6pkgzUYYQ0kzQEIoMIFYzTkMoNmDgw4Aq0UiVhESVpExXAABh1OrBwgZrMQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+function unreadOverlayPng() {
+  return UNREAD_DOT_PNG;
+}
+
 function normalizeUnreadCount(value) {
   if (!Number.isFinite(value)) return 0;
   return clamp(Math.trunc(value), 0, 999);
@@ -92,6 +101,7 @@ module.exports = {
   DEFAULT_BOUNDS,
   MIN_BOUNDS,
   normalizeUnreadCount,
+  unreadOverlayPng,
   parseWindowState,
   resolveWindowState,
 };

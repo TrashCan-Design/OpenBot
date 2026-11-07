@@ -454,7 +454,14 @@ describe("VPS computer", () => {
     const status = await vpsComputerAction("provision", CONFIG, BOT_ID, provision.runner);
     expect(status.ready).toBe(true);
     const run = provision.calls.find(({ args }) => args[2] === "run")?.args ?? [];
-    expect(run).toContain("--memory");
+    expect(run[run.indexOf("--memory") + 1]).toBe("4g");
+    expect(run[run.indexOf("--memory-swap") + 1]).toBe("4g");
+    const shared = fixture({ image: false, container: false });
+    await vpsComputerAction("provision", CONFIG, "openbot-shared-desktop:production", shared.runner);
+    const sharedRun = shared.calls.find(({ args }) => args[2] === "run")?.args ?? [];
+    expect(sharedRun[sharedRun.indexOf("--memory") + 1]).toBe("6g");
+    expect(sharedRun[sharedRun.indexOf("--memory-swap") + 1]).toBe("6g");
+    expect(shared.calls.some(({ args }) => args[2] === "rm")).toBe(false);
     expect(run[run.indexOf("--pids-limit") + 1], "Firefox needs room for its threads").toBe(String(PIDS_LIMIT));
     expect(run).toContain("--ipc");
     expect(run[run.indexOf("--ipc") + 1]).toBe("private");

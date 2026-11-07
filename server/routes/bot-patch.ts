@@ -378,6 +378,9 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         }
         patch.vpsDesktopMode = body.vpsDesktopMode;
       }
+      if (body.cloudBackend === "vps" && body.vpsDesktopMode === undefined && patch.vpsDesktopMode === undefined && existingBot?.cloudBackend !== "vps" && existingBot?.vpsDesktopMode === undefined) {
+        patch.vpsDesktopMode = "shared";
+      }
       if (body.vpsAlias !== undefined) {
         if (body.vpsAlias === null || body.vpsAlias === "") {
           patch.vpsAlias = undefined;

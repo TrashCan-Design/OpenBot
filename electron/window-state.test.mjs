@@ -2,7 +2,8 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
+const { inflateSync } = require("node:zlib");
+const { normalizeUnreadCount, parseWindowState, resolveWindowState, unreadOverlayPng } = require("./window-state.cjs");
 
 const primary = { x: 0, y: 0, width: 1920, height: 1080 };
 const left = { x: -1600, y: 0, width: 1600, height: 900 };
@@ -37,6 +38,17 @@ describe("desktop window state", () => {
       bounds: { width: 1040, height: 760 },
       maximized: false,
     });
+  });
+
+  it("uses a blue dot for the Windows unread overlay", () => {
+    const png = unreadOverlayPng();
+    expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(png.toString("utf8")).not.toContain("openbot");
+    const idatAt = png.indexOf("IDAT");
+    const raw = inflateSync(png.subarray(idatAt + 4, idatAt + 4 + png.readUInt32BE(idatAt - 4)));
+    const center = 8 * (1 + 16 * 4) + 1 + 8 * 4;
+    expect([...raw.subarray(center, center + 3)]).toEqual([37, 99, 235]);
+    expect(raw[4]).toBe(0);
   });
 
   it("bounds native unread counts", () => {

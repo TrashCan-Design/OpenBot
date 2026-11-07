@@ -213,6 +213,7 @@ import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
 import { applyChannelUpdate } from "./channel-update.ts";
 import { describeSharedDesktop, SHARED_FRESH_OBSERVATION, sharedObservationTool, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { screenshotWasRequested } from "./screenshot-request.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
@@ -6918,9 +6919,7 @@ bus.subscribe((event: RuntimeEvent) => {
             finalScreenFrame(bot.id, event.threadId),
             new Promise<null>((resolve) => { timeout = setTimeout(() => resolve(null), SCREEN_SETTLE_TIMEOUT_MS); }),
           ]).then((frame) => {
-            if (frame && isCurrent()) {
-              store.insertMessageAfter(event.threadId, settleLeafId, { role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
-            }
+            if (frame && isCurrent() && screenshotWasRequested(store.activePath(event.threadId))) store.insertMessageAfter(event.threadId, settleLeafId, { role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
           }).catch(() => {}).finally(() => {
             clearTimeout(timeout);
           });

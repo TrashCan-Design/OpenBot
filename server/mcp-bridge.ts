@@ -118,6 +118,8 @@ export interface BridgeOptions {
   gate?: { url: string; token: string; describe?: (frame: unknown) => Record<string, string> };
   journal?: { url: string; token: string };
   rewriteResponse?: (line: string) => string;
+  /** Rewrites a tools/call after the control gate has accepted it. A refusal is never rewritten into a forward. */
+  prepareLine?: (line: string) => string;
   /** A tools/call the bridge carries out itself through the child, answering the agent with what this resolves to; null
    * forwards the frame as it came. Frames after it wait, so the agent's calls still act in order. */
   relay?: (call: ToolCall, child: ChildCalls) => Promise<unknown> | null;
@@ -358,15 +360,20 @@ export function runMcpBridge(options: BridgeOptions): void {
     const url = options.gate.url;
     void fetch(`${url}${url.includes("?") ? "&" : "?"}phase=${phase}`, { headers: { authorization: `Bearer ${options.gate.token}` } }).catch(() => {});
   };
+  const prepare = (line: string) => {
+    if (!options.prepareLine) return line;
+    try { return options.prepareLine(line); } catch { return line; }
+  };
   const forward = (line: string): void | Promise<void> => {
-    const call = relayableCall(line);
+    const prepared = prepare(line);
+    const call = relayableCall(prepared);
     if (call && sharedObservationTool(call.call.name)) observed.add(String(call.id));
     else if (call) admitted.add(String(call.id));
     if (!options.relay) {
-      child.stdin.write(line + "\n");
+      child.stdin.write(prepared + "\n");
       return;
     }
-    sending = sending.then(() => send(line)).catch(() => {});
+    sending = sending.then(() => send(prepared)).catch(() => {});
     return sending;
   };
   const intercept = createMcpBridgeInterceptor({

@@ -1,7 +1,7 @@
 // The one Grok Bot import, used by Templates → Import, Settings → Import and the welcome tour's import step:
 // link → card → Sign in with Cursor or the export prompt → reply → preview → Add → the Chief of Staff finishes.
 import { Check, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { t } from "@/lib/i18n";
 import type { PendingTeamImport } from "@/lib/team-import";
@@ -25,6 +25,7 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
   const { state, dispatch } = useStore();
   const [pending, setPending] = useState<PendingTeamImport | null>(null);
   const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
   const [added, setAdded] = useState<Bot | null>(null);
   const [error, setError] = useState("");
 
@@ -50,6 +51,8 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
   if (pending) {
     const taken = new Set(state.bots.map((bot) => bot.name.trim().toLowerCase()));
     const add = async () => {
+      if (addingRef.current) return;
+      addingRef.current = true;
       setAdding(true);
       setError("");
       try {
@@ -60,6 +63,7 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
       } catch (cause) {
         setError(errorText(cause));
       } finally {
+        addingRef.current = false;
         setAdding(false);
       }
     };
