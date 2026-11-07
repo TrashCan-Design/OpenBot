@@ -169,7 +169,11 @@ function applyUnreadBadge(win = mainWindow) {
   const count = normalizeUnreadCount(unreadCount);
   if (process.platform === "win32") {
     if (!win || win.isDestroyed()) return;
-    unreadOverlayIcon ??= nativeImage.createFromBuffer(unreadOverlayPng());
+    if (!unreadOverlayIcon) {
+      unreadOverlayIcon = nativeImage.createEmpty();
+      unreadOverlayIcon.addRepresentation({ scaleFactor: 1, buffer: unreadOverlayPng(16) });
+      unreadOverlayIcon.addRepresentation({ scaleFactor: 2, buffer: unreadOverlayPng(32) });
+    }
     win.setOverlayIcon(
       count > 0 && !unreadOverlayIcon.isEmpty() ? unreadOverlayIcon : null,
       count > 0 ? `${count} unread conversation${count === 1 ? "" : "s"}` : "No unread conversations",

@@ -21,7 +21,7 @@ import {
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
 } from "./container-computer.ts";
-import { PER_BOT_VPS_MEMORY, PIDS_LIMIT, considerSharedDesktopMemory, raisePidsLimit, vpsContainerMemory } from "./container-limits.ts";
+import { PER_BOT_VPS_MEMORY, PIDS_LIMIT, considerSharedDesktopMemory, raisePidsLimit, sharedProvisionMemory } from "./container-limits.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { killCliTree, spawnCli } from "./procs.ts";
@@ -1089,7 +1089,7 @@ export async function vpsComputerAction(
             imageRef = (await computeVpsComputerStatus(cfg, botId, runner)).image_id;
           }
           if (!imageRef) throw Object.assign(new Error("The prepared VPS image could not be identified"), { status: 409 });
-          await run(vpsContainerRunArgs(before.container_name, imageRef, undefined, vpsContainerMemory(botId)));
+          await run(vpsContainerRunArgs(before.container_name, imageRef, undefined, await sharedProvisionMemory(botId, run)));
         } else {
           assertUsableContainer(before);
           if (before.container === "stopped") await run(["start", containerRef]);

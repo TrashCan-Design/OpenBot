@@ -26,6 +26,7 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
   const [pending, setPending] = useState<PendingTeamImport | null>(null);
   const [adding, setAdding] = useState(false);
   const addingRef = useRef(false);
+  const importKey = useRef("");
   const [added, setAdded] = useState<Bot | null>(null);
   const [error, setError] = useState("");
 
@@ -56,7 +57,7 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
       setAdding(true);
       setError("");
       try {
-        const response = await addTemplate(pending.manifest, dispatch);
+        const response = await addTemplate(pending.manifest, dispatch, importKey.current);
         if (!response.first) return setPending(null);
         setAdded(response.first);
         if (!grokSetupLeft(pending.grokSetup)) onAdded?.(response.first);
@@ -95,5 +96,5 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
     );
   }
 
-  return <GrokImportBox link={link} onPreview={(preview) => { setPending(preview); setError(""); }} bare={bare} />;
+  return <GrokImportBox link={link} onPreview={(preview) => { importKey.current = crypto.randomUUID(); setPending(preview); setError(""); }} bare={bare} />;
 }

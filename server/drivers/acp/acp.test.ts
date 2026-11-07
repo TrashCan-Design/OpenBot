@@ -1796,6 +1796,35 @@ describe("ACP turns (fake CLI)", () => {
     expect(readFileSync(answer, "utf8")).toBe("allow-always");
   });
 
+  it("keeps a desktop Always allow inside this driver instead of handing it to the agent", async () => {
+    process.env.FAKE_ACP_ALLOW_ALWAYS = "1";
+    process.env.FAKE_ACP_PERMISSION_TOOL_CALL = JSON.stringify({ kind: "other", title: "mcp__computer__click", rawInput: { x: 3, y: 4 } });
+    const answer = join(scratch, "computer-always.txt");
+    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    await create(GrokAgentDriver, "permission");
+    await instance.adapter.sendTurn({ threadId: "t-computer-always", text: "go", approvalMode: "ask" });
+    const opened = await recorder.until((event) => event.type === "request.opened");
+    await instance.adapter.respondToRequest("t-computer-always", (opened as { requestId: string }).requestId, { behavior: "allow", always: true });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(readFileSync(answer, "utf8")).toBe("allow-once");
+    const second = await instance.adapter.sendTurn({ threadId: "t-computer-always", text: "again", approvalMode: "ask", resumeCursor: "fake-acp-session" });
+    await recorder.until((event) => event.type === "turn.completed" && event.turnId === second.turnId);
+    expect(recorder.events.filter((event) => event.type === "request.opened")).toHaveLength(1);
+    expect(readFileSync(answer, "utf8")).toBe("allow-once");
+  });
+
+  it("cancels an open permission when the person stops the turn", async () => {
+    const answer = join(scratch, "permission-stop.txt");
+    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    await create(GrokAgentDriver, "permission");
+    await instance.adapter.sendTurn({ threadId: "t-permission-stop", text: "go", approvalMode: "ask" });
+    await recorder.until((event) => event.type === "request.opened");
+    await instance.adapter.interruptTurn("t-permission-stop");
+    const done = await recorder.until((event) => event.type === "turn.completed");
+    expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+    expect(readFileSync(answer, "utf8")).toBe("cancelled");
+  });
+
   it("remembers the exact operation for the session when the agent offers no allow_always", async () => {
     // Grok 4.6 often omits allow_always.
     const answer = join(scratch, "permission-answer-once.txt");

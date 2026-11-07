@@ -49,6 +49,19 @@ describe("desktop window state", () => {
     const center = 8 * (1 + 16 * 4) + 1 + 8 * 4;
     expect([...raw.subarray(center, center + 3)]).toEqual([37, 99, 235]);
     expect(raw[4]).toBe(0);
+    const large = unreadOverlayPng(32);
+    expect(large.readUInt32BE(16)).toBe(32);
+    expect(large.readUInt32BE(20)).toBe(32);
+    const largeIdat = large.indexOf("IDAT");
+    const largeRaw = inflateSync(large.subarray(largeIdat + 4, largeIdat + 4 + large.readUInt32BE(largeIdat - 4)));
+    let ring = false;
+    for (let y = 0; y < 32 && !ring; y += 1) {
+      for (let x = 0; x < 32; x += 1) {
+        const at = y * (1 + 32 * 4) + 1 + x * 4;
+        if (largeRaw[at] === 255 && largeRaw[at + 1] === 255 && largeRaw[at + 2] === 255 && largeRaw[at + 3] === 255) ring = true;
+      }
+    }
+    expect(ring).toBe(true);
   });
 
   it("bounds native unread counts", () => {

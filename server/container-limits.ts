@@ -21,6 +21,22 @@ export function vpsContainerMemory(botId: string): string {
   return botId.startsWith("openbot-shared-desktop:") ? SHARED_DESKTOP_MEMORY : PER_BOT_VPS_MEMORY;
 }
 
+/** A new shared container gets 6 GiB only when the host can spare it. A missing measurement stays at 4 GiB. */
+export async function sharedProvisionMemory(
+  botId: string,
+  docker: (args: string[], timeoutMs?: number) => Promise<{ stdout?: string }>,
+): Promise<string> {
+  const asked = vpsContainerMemory(botId);
+  if (asked !== SHARED_DESKTOP_MEMORY) return asked;
+  try {
+    const reported = Number((await docker(["info", "--format", "{{.MemTotal}}"], 10_000)).stdout?.trim());
+    const host = Number.isFinite(reported) && reported > 0 ? reported : null;
+    return sharedDesktopMemoryPlan(4 * 1024 * 1024 * 1024, host) === "raise" ? SHARED_DESKTOP_MEMORY : PER_BOT_VPS_MEMORY;
+  } catch {
+    return PER_BOT_VPS_MEMORY;
+  }
+}
+
 /** Docker and Podman change an existing container's cap in place, running or stopped, so a desktop made under the old cap
  * needs no recreate. Tried once per container per run: an engine without `update --pids-limit` keeps the old cap. */
 export function raisePidsLimit(
