@@ -49,3 +49,19 @@ The latest Boat-start changes do not apply to the removed provider. No vendor
 Admin, hosted cloud-home deployment, relay, or billing path was restored. The
 selected optional features listed in `selected-upstream-work.md` remain pending;
 this follow-up does not authorize or implement them.
+
+## Windows build preparation — 7 November 2026 (Asia/Kolkata)
+
+Fetched official main 1bc4749aa8307d7d6998bf86de4ef6478460dd93 and reviewed
+the ten-commit range after 07d5e152 against the retained fork before editing.
+The two upstream version bumps do not set this fork's version. Relay metrics,
+Cloud rail/place/phone routing and removal of the hosted HighLevel integration
+are not imported into this Windows artifact build. Engine self-updating is a
+new behavior and is not selected. Attachment/voice-note fixes change newer
+shared driver/attachment contracts and need a separate compatibility review;
+they are not blindly cherry-picked or claimed implemented here.
+
+This build uses the fork's current shared-desktop code and corrects its two
+observed route-ratchet/OpenCode-fixture regressions. It restores the existing
+installer branch's build trigger using package-win.yml instead of copying the
+obsolete fork-windows.yml repository-name checks.

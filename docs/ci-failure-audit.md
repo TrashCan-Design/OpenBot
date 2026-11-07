@@ -240,3 +240,31 @@ The server bundle and isolated packaged-server smoke pass. No real GCP, Windows
 desktop or EXE verification was performed. A first parallel build attempt was
 killed with exit 137; memory-heavy type/build checks were rerun sequentially.
 Fresh CI on the published fix commit is required before any merge decision.
+
+## Windows installer preparation — 7 November 2026
+
+All 16 shard logs for run 42293683280 at 5c8a2a4 were retrieved: 200 failed
+Ubuntu tests and 151 failed Windows tests. These are test counts, not distinct
+root causes. Typecheck/lint, focused shared-desktop safety, production UI build,
+packaged server on both platforms, Windows CUA/browser checks and the other
+non-Vitest jobs passed. No Windows installer job was triggered by that PR push.
+
+Two change-specific problems are corrected before the installer build:
+
+- The internal shared-VPS route added two literal path checks to index.ts,
+  exceeding its route ratchet (93 versus 91). Internal computer HTTP handlers
+  are now in server/routes/internal-computer.ts, still called only after the
+  existing bearer/kind/sender/generation checks. The ratchet is not raised.
+- OpenCode's resumed-variant fixture put two threads in the same working folder.
+  The intentional folder isolation started a separate process whose fixture
+  log began from zero, so slicing by the first process's log count hid the
+  resumed effort setter. Fixture threads now have distinct working folders;
+  same-folder process isolation remains in force. No product model/effort
+  behavior was weakened to satisfy this assertion.
+
+The remaining matrix failures include retired Boat/hosted-provider expectations,
+old key/catalog/analytics/UI assumptions, and retained-feature failures in
+phone-secret, scheduling, reports, loading state, thread links and coordination.
+They are not all cosmetic, and are not marked resolved by a successful package
+build. The installer branch is an artifact build, not an assertion that the full
+suite is green or permission to merge the draft PR into main.

@@ -213,8 +213,9 @@ import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
 import { applyChannelUpdate } from "./channel-update.ts";
 import { describeSharedDesktop, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
-import { SharedVpsJournal } from "./shared-vps-journal.ts"; import { createSharedVpsGateway, executeSharedVpsRpc, drainSharedVpsViewers, recoverSharedVps, sharedVpsPreview } from "./shared-vps-host.ts";
+import { SharedVpsJournal } from "./shared-vps-journal.ts"; import { createSharedVpsGateway, drainSharedVpsViewers, recoverSharedVps, sharedVpsPreview } from "./shared-vps-host.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
+import { createInternalComputerRoutes, SHARED_VPS_MCP_PATH } from "./routes/internal-computer.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
 import {
@@ -2521,6 +2522,7 @@ const computerControl = new ComputerControl((key, snapshot) => {
 const controlLeaseIdSchema = z.string().min(16).max(120).regex(/^[A-Za-z0-9_-]+$/);
 const sharedVpsSeat = new SharedVpsSeat(turnResources, computerControl, alias => drainSharedVpsViewers(alias, store.bots, bot => vpsSshAliasForBot(cfg, bot), desktopViewer), new SharedVpsJournal(join(DATA_DIR, "shared-vps-operations.json")));
 const sharedVpsGateway = createSharedVpsGateway(sharedVpsSeat);
+const internalComputerRoutes = createInternalComputerRoutes<InternalCapability>({ gateway: sharedVpsGateway, botExists: id => Boolean(store.bot(id)), active: cap => internalCapabilityIsActive(cap), checked: cap => savedSteps.gateChecked(cap), gate: (cap, signal, query) => computerCallGate(cap, signal, query ? yourComputerCallFrom(query) : undefined, query) });
 function controlIntegration(
   botId: string,
   threadId: string,
@@ -13097,7 +13099,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? "phone"
         : path.startsWith("/api/internal/connectors/")
         ? "connectors"
-        : path === "/api/internal/shared-vps/mcp" || path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
+        : path === SHARED_VPS_MCP_PATH || path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
           ? "computer"
           : "agents";
       if (internalCapability.kind !== requiredCapabilityKind) {
@@ -14728,18 +14730,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.writeHead(upstream.status, headers);
         return res.end(Buffer.from(withScopeHint(proactive.fence.confines(internalCapability.threadId) ? recordsAnswer(upstream.bytes, upstream.contentType) : upstream.bytes, upstream.contentType, connectorCalls.map((call) => call.slug))));
       }
-      if (method === "POST" && path === "/api/internal/shared-vps/mcp") return json(res, 200, { result: await executeSharedVpsRpc(sharedVpsGateway, internalCapability, await readInternalBody(), () => internalCapabilityIsActive(internalCapability), async () => { const state = await computerCallGate(internalCapability); if (state.held) throw new Error(controlRefusal(state)); }) });
-      if (path === "/api/internal/computer-control") {
-        const botId = url.searchParams.get("botId") ?? "";
-        const bot = store.bot(botId);
-        if (!bot) return json(res, 404, { error: "no such bot" });
-        if (method === "GET") { savedSteps.gateChecked(internalCapability);
-          const abort = new AbortController();
-          res.once("close", () => { if (!res.writableEnded) abort.abort(); });
-          return json(res, 200, await computerCallGate(internalCapability, abort.signal, yourComputerCallFrom(url.searchParams), url.searchParams));
-        }
-        return json(res, 405, { error: "method not allowed" });
-      }
+      const computerReply = await internalComputerRoutes({ req, res, url, path, method, auth, json, readBody, capability: internalCapability, readInternalBody });
+      if (computerReply !== PASS) return;
       if (method === "POST" && path === "/api/internal/connectors/request") {
         const body = await readInternalBody();
         const botId = String(body.botId ?? "");
