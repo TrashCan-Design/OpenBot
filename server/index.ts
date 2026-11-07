@@ -81,7 +81,7 @@ import {
 import { fitsOnOneLine, parseBotProfilePatch } from "./bot-profile.ts";
 import { routeDirectTurn } from "./turn-route.ts"; import { QuickModelFallback } from "./quick-model-fallback.ts"; import { COMPUTER_JOURNAL_PATH, createSavedSteps, personRequest, savedStepsEnabled } from "./saved-steps/saved-steps.ts";
 import { groupTurnCwd } from "./room-cwd.ts";
-import { RoomTurnDeadline, RoomTurnStallRegistry, effectiveRoomTurnTimeoutMinutes, parseConversationTurnTimeout, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
+import { RoomTurnDeadline, RoomTurnStallRegistry, effectiveRoomTurnTimeoutMinutes, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import { roomTurnEnd, type RoomClaimEnd } from "./room-turn-end.ts";
 import { applyHoldDirective, classifyHoldDirective, heldMemberLine, rememberHeldMessage, stopWordPlacement } from "./room-holds.ts";
 import { createPersonStop } from "./host/person-stop.ts";
@@ -211,6 +211,12 @@ import {
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
 import { recoveryCapabilityError, startupBackups } from "./automatic-recovery.ts";
 import { createQuotaSwitchHost } from "./host/quota-switch.ts"; import { quotaSwitchEnabled } from "./quota-switch.ts";
+import { applyChannelUpdate } from "./channel-update.ts";
+import { screenshotWasRequested } from "./screenshot-request.ts";
+import { describeSharedDesktop, sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { SharedVpsJournal } from "./shared-vps-journal.ts"; import { createSharedVpsGateway, drainSharedVpsViewers, recoverSharedVps, sharedVpsPreview } from "./shared-vps-host.ts";
+import { SharedVpsSeat } from "./shared-vps-seat.ts";
+import { createInternalComputerRoutes, SHARED_VPS_MCP_PATH } from "./routes/internal-computer.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import { createMcpServersHost } from "./host/mcp-servers-host.ts"; import { createLimitTakeover, signedOutStop } from "./host/limit-takeover.ts";
 import {
@@ -428,7 +434,7 @@ import { createLoopGuard, loopGuardSettings } from "./host/loop-guard.ts"; impor
 import { claudeUserSkillsEnabled, settingsTurnFields } from "./turn-settings.ts";
 import { addHeldSecretScrubber, redactSecretsInText, scrubHeldSecrets } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
-import { vpsConfigForBot, vpsSshAliasForBot } from "./vps-hosts.ts";
+import { vpsAliasesInPlay, vpsConfigForBot, vpsSshAliasForBot } from "./vps-hosts.ts";
 import { ROUTINE_RESTARTED, RoutineManager, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
 import { BROWSER_UPLOAD_TOOL, browserRuntimeEnv } from "./browser-runtime.ts";
@@ -538,7 +544,7 @@ import {
   serializeSessionCookie,
   sessionCookieName, ownerOrAdmin,
 } from "./request-auth.ts";
-import { cookieMaxAgeSeconds, formatPairingCode, SessionRegistry, type Scope, type SessionRecord } from "./sessions.ts";
+import { cookieMaxAgeSeconds, formatPairingCode, pairingRequest, SessionRegistry, type SessionRecord } from "./sessions.ts";
 import { ThreadStarters } from "./thread-starters.ts";
 import {
   appendAdminAction,
@@ -1642,6 +1648,7 @@ type InternalCapability = {
   createdRooms?: number;
   openedThreads: number;
   orphanExpiresAt: number;
+  sharedVps?: { alias: string; container: string };
   localVmTarget?: LocalVmTarget;
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
@@ -2500,6 +2507,9 @@ const computerControlRevision = new Map<string, number>();
 const computerControl = new ComputerControl((key, snapshot) => {
   const members = key.startsWith("computer_")
     ? store.bots.filter(bot => inheritedTeamComputer(bot)?.id === key.slice("computer_".length)).map(bot => bot.id)
+    : key.startsWith("shared_vps_")
+      ? store.bots.filter(bot => bot.cloudBackend === "vps" && bot.vpsDesktopMode === "shared" &&
+          sharedVpsControlKey(vpsSshAliasForBot(cfg, bot) ?? "") === key).map(bot => bot.id)
     : [key];
   for (const botId of members) {
   computerControlRevision.set(botId, (computerControlRevision.get(botId) ?? 0) + 1);
@@ -2511,13 +2521,16 @@ const computerControl = new ComputerControl((key, snapshot) => {
   }
 });
 const controlLeaseIdSchema = z.string().min(16).max(120).regex(/^[A-Za-z0-9_-]+$/);
+const sharedVpsSeat = new SharedVpsSeat(turnResources, computerControl, alias => drainSharedVpsViewers(alias, store.bots, bot => vpsSshAliasForBot(cfg, bot), desktopViewer), new SharedVpsJournal(join(DATA_DIR, "shared-vps-operations.json")));
+const sharedVpsGateway = createSharedVpsGateway(sharedVpsSeat);
+const internalComputerRoutes = createInternalComputerRoutes<InternalCapability>({ gateway: sharedVpsGateway, botExists: id => Boolean(store.bot(id)), active: cap => internalCapabilityIsActive(cap), checked: cap => savedSteps.gateChecked(cap), gate: (cap, signal, query) => computerCallGate(cap, signal, query ? yourComputerCallFrom(query) : undefined, query) });
 function controlIntegration(
   botId: string,
   threadId: string,
   generation: string,
-  machine: "this computer" | { localVmTarget?: LocalVmTarget; boxId?: string | null } = {},
+  machine: "this computer" | { localVmTarget?: LocalVmTarget; boxId?: string | null; sharedVps?: { alias: string; container: string } } = {},
 ) {
-  const { localVmTarget, boxId } = machine === "this computer" ? {} : machine;
+  const { localVmTarget, boxId, sharedVps } = machine === "this computer" ? {} : machine;
   return {
     url: `http://127.0.0.1:${PORT}/api/internal/computer-control?botId=${encodeURIComponent(botId)}`,
     token: mintInternalCapability({
@@ -2526,7 +2539,7 @@ function controlIntegration(
       generation,
       depth: 0,
       kind: "computer",
-      ...(localVmTarget ? { localVmTarget } : {}),
+      ...(sharedVps ? { sharedVps } : {}), ...(localVmTarget ? { localVmTarget } : {}),
       ...(boxId !== undefined ? { boxId } : {}),
       ...(teamComputerTurns.get(threadId) ? { teamComputerId: teamComputerTurns.get(threadId)!.computerId } : {}),
       skillAuthoring: false,
@@ -2982,6 +2995,7 @@ function previewSystemPrompt(bot: BotRecord) {
     kind: previewComputer === "vm" ? "vm" : previewComputer === "cloud"
       ? bot.cloudBackend === "vps" ? "vps" : "box" : previewComputer === "local" ? "local" : null,
     vmPrivate: localVmMode(cfg) === "per-bot",
+    vpsShared: bot.vpsDesktopMode === "shared",
   });
   const peers = reachablePeers(store.bots, bot);
   const coordination = chiefLevel(bot)
@@ -3658,123 +3672,16 @@ function createChannel(value: unknown): GroupRecord {
 }
 
 function updateChannel(groupId: string, value: unknown): GroupRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw Object.assign(new Error("body must be a JSON object"), { status: 400 });
-  }
-  const body = value as Record<string, unknown>;
-
-  const existing = store.group(groupId);
-  if (!existing) throw Object.assign(new Error("no such room"), { status: 404 });
-  if (body.memberIds !== undefined && phoneSecretSubmissions.hasGroup(existing.id)) {
-    throw Object.assign(new Error("this channel is securely saving a credential — try again when it finishes"), { status: 409 });
-  }
-  if (
-    channelTaskBlocked(existing) &&
-    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.bulletin !== undefined)
-  ) {
-    throw Object.assign(new Error("this channel is working or waiting on you — finish that turn first"), { status: 409 });
-  }
-  const patch: Record<string, unknown> = {};
-  if (body.name !== undefined) {
-    if (typeof body.name !== "string") throw Object.assign(new Error("room name must be a string"), { status: 400 });
-    const name = body.name.trim();
-    if (!name) throw Object.assign(new Error("room name must not be empty"), { status: 400 });
-    if (name.length > 100) throw Object.assign(new Error("room name must be at most 100 characters"), { status: 400 });
-    if (!fitsOnOneLine(name)) throw Object.assign(new Error("room name must fit on one line"), { status: 400 });
-    patch.name = name;
-  }
-  if (body.bulletin !== undefined) {
-    if (typeof body.bulletin !== "string") throw Object.assign(new Error("bulletin must be a string"), { status: 400 });
-    if (body.bulletin.length > 12_000) {
-      throw Object.assign(new Error("bulletin must be at most 12000 characters"), { status: 400 });
-    }
-    patch.bulletin = body.bulletin;
-  }
-  if (body.description !== undefined) {
-    if (typeof body.description !== "string") throw Object.assign(new Error("description must be a string"), { status: 400 });
-    const trimmed = body.description.trim();
-    if (!trimmed) patch.description = undefined;
-    else if (/[\n\r]/.test(trimmed)) throw Object.assign(new Error("description must be a single line"), { status: 400 });
-    else if (trimmed.length > 120) throw Object.assign(new Error("description must be at most 120 characters"), { status: 400 });
-    else patch.description = trimmed;
-  }
-  if (body.unread !== undefined) {
-    if (typeof body.unread !== "boolean") throw Object.assign(new Error("unread must be true or false"), { status: 400 });
-    patch.unread = body.unread;
-  }
-  if (body.memberIds !== undefined) {
-    if (existing.dm) throw Object.assign(new Error("direct-message channels cannot change members"), { status: 400 });
-    const roster = checkedMemberIds(body.memberIds);
-    if (!roster.ok) throw Object.assign(new Error(roster.error.replace("channel", "room")), { status: 400 });
-    const audienceConflict = roomAudienceConflict(roster.memberIds, existing.memberIds);
-    if (audienceConflict) throw Object.assign(new Error(audienceConflict), { status: 400 });
-    const removedGoalLead = routines!.listRoutines().some(
-      (routine) =>
-        routine.enabled &&
-        routine.target === "room-goal" &&
-        routine.groupId === existing.id &&
-        !roster.memberIds.includes(routine.botId),
-    ) || routines!.listRuns().some(
-      (run) =>
-        run.target === "room-goal" &&
-        run.groupId === existing.id &&
-        ["queued", "running", "waiting"].includes(run.status) &&
-        !roster.memberIds.includes(run.botId),
-    );
-    if (removedGoalLead) {
-      throw Object.assign(new Error("pause or reassign this room's team-goal routine before removing its lead"), { status: 409 });
-    }
-    patch.memberIds = roster.memberIds;
-  }
-  if (body.defaultResponder !== undefined) {
-    const memberIds = (patch.memberIds as string[] | undefined) ?? existing.memberIds;
-    const responder = checkedGroupResponder(body.defaultResponder, memberIds);
-    if (!responder) throw Object.assign(new Error("invalid default responder"), { status: 400 });
-    patch.defaultResponder = responder;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, "turnTimeoutMinutes")) {
-    if (!existing.dm) {
-      throw Object.assign(new Error("set the turn limit on that conversation"), { status: 400 });
-    }
-    const parsed = parseConversationTurnTimeout(body.turnTimeoutMinutes);
-    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 });
-    patch.turnTimeoutMinutes = parsed.minutes;
-  }
-  if (body.cwd !== undefined) {
-    if (existing.dm) throw Object.assign(new Error("direct-message channels cannot have a working folder"), { status: 400 });
-    if (existing.pinnedCwd !== undefined) {
-      throw Object.assign(new Error("the room's working folder is fixed after its first turn"), { status: 409 });
-    }
-    const checked = validateBotCwd(body.cwd);
-    if (!checked.ok) throw Object.assign(new Error(checked.error), { status: 400 });
-    patch.cwd = checked.cwd ?? undefined;
-  }
-  if (body.pinnedMessageId !== undefined) {
-    if (body.pinnedMessageId === null || body.pinnedMessageId === "") patch.pinnedMessageId = undefined;
-    else if (typeof body.pinnedMessageId === "string" && /^[\w-]+$/.test(body.pinnedMessageId)) {
-      patch.pinnedMessageId = body.pinnedMessageId;
-    } else throw Object.assign(new Error("pinnedMessageId must be a message id"), { status: 400 });
-  }
-  if (body.section !== undefined) {
-    if (body.section === null) patch.section = undefined;
-    else if (typeof body.section !== "string") throw Object.assign(new Error("section must be a string"), { status: 400 });
-    else {
-      const trimmed = body.section.trim();
-      if (!trimmed) patch.section = undefined;
-      else if (trimmed.length > 60) throw Object.assign(new Error("section must be at most 60 characters"), { status: 400 });
-      else patch.section = trimmed;
-    }
-  }
-  // Admin-only, and the only way a room's floor widens; a Chief's PATCH never has it.
-  const resetAudience = body.resetAudience !== undefined;
-  if (resetAudience) {
-    if (body.resetAudience !== true) throw Object.assign(new Error("resetAudience must be true"), { status: 400 });
-    patch.audienceFloor = undefined;
-  }
-  const group = store.patchGroup(groupId, patch);
-  if (resetAudience) audienceChanged();
-  if (!group) throw Object.assign(new Error("no such room"), { status: 404 });
-  return group;
+  return applyChannelUpdate(groupId, value, {
+    group: (id) => store.group(id),
+    patchGroup: (id, patch) => store.patchGroup(id, patch),
+    secretBusy: (id) => phoneSecretSubmissions.hasGroup(id),
+    blocked: channelTaskBlocked,
+    members: checkedMemberIds,
+    audienceConflict: roomAudienceConflict,
+    routines: () => routines!,
+    audienceChanged,
+  });
 }
 
 const channelTaskBlocked = (group: GroupRecord) =>
@@ -4721,13 +4628,32 @@ function audienceChanged(): void {
 const upgrades = createUpgrades();
 const desktopViewer = createDesktopViewer({
   upgrades,
+  authorize: (id, auth) => {
+    if (!id.startsWith("vps/")) return true;
+    const bot = store.bot(id.slice(4));
+    if (bot?.cloudBackend !== "vps" || bot.vpsDesktopMode !== "shared") return true;
+    const alias = vpsSshAliasForBot(cfg, bot);
+    return Boolean(alias && sharedVpsSeat.allows(alias, auth.kind === "session" ? auth.session.id : "loopback"));
+  },
   target: (id) => {
     if (id.startsWith("vps/")) {
       const botId = id.slice(4);
-      if (store.bot(botId)?.cloudBackend !== "vps") return;
+      const bot = store.bot(botId);
+      if (bot?.cloudBackend !== "vps") return;
       return { key: id, resolve: async () => {
-        const connection = vps.vpsDesktopConnection(botId);
+        const alias = vpsSshAliasForBot(cfg, bot);
+        const desktopId = vpsDesktopOwnerId(bot, alias);
+        const connection = vps.vpsDesktopConnection(desktopId);
         if (!connection) throw Object.assign(new Error("VPS viewer is not open"), { status: 409 });
+        if (bot.vpsDesktopMode === "shared" && alias) {
+          const controlKey = sharedVpsControlKey(alias);
+          return {
+            ...connection,
+            touch: () => sharedVpsSeat.touchCurrent(alias),
+            live: () => connection.live() && computerControl.snapshot(controlKey).held &&
+              botComputerControlKey(store.bot(botId) ?? bot) === controlKey,
+          };
+        }
         return connection;
       } };
     }
@@ -4743,6 +4669,11 @@ const desktopViewer = createDesktopViewer({
   // A control lease opens only the computer it holds, and only when that is the desktop being viewed.
   lease: (id, botId, controlLeaseId, threadId) => {
     const bot = store.bot(botId);
+    if (id === `vps/${botId}` && bot?.cloudBackend === "vps" && bot.vpsDesktopMode === "shared") {
+      const alias = vpsSshAliasForBot(cfg, bot);
+      if (!alias || !sharedVpsSeat.owns(alias, controlLeaseId)) return;
+      return () => sharedVpsSeat.owns(alias, controlLeaseId);
+    }
     if (!bot || viewerTargetId(localVmTargetForStatus(bot.id, threadId)) !== id) return;
     const key = botComputerControlKey(bot);
     const holds = () => computerControl.ownsLease(key, controlLeaseId);
@@ -4750,6 +4681,7 @@ const desktopViewer = createDesktopViewer({
   },
 });
 function closeSessionStreams(sessionId: string): void {
+  sharedVpsSeat.releaseSession(sessionId);
   browserLive.closeForOwner(sessionId);
   desktopViewer.closeForOwner(sessionId);
   for (const client of sseClients) {
@@ -4760,7 +4692,6 @@ sessions.onSessionRevoked((sessionId) => {
   providerAuthSessions.revokeOwner(sessionId);
   mcpOAuth.revokeOwner(sessionId);
   closeSessionStreams(sessionId);
-  // A revoked owner device no longer vouches for its lines (cloudOwnerPerson).
   ownerOnlyCache.clear();
 });
 
@@ -5739,13 +5670,30 @@ function teamComputerPrompt(computer: TeamComputerRecord | undefined): string {
 
 function botComputerControlKey(bot: BotRecord): string {
   const computer = inheritedTeamComputer(bot);
-  return computer ? teamComputerOwner(computer.id) : bot.id;
+  if (computer) return teamComputerOwner(computer.id);
+  const alias = bot.cloudBackend === "vps" && bot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, bot) : null;
+  return alias ? sharedVpsControlKey(alias) : bot.id;
 }
 
-/** Waits here up to COMPUTER_CALL_WAIT_MS; a call that waited through a person's hold, or whose turn ended, is never performed. */
-async function computerCallGate(internalCapability: InternalCapability, signal?: AbortSignal, call?: ReturnType<typeof yourComputerCallFrom>): Promise<ControlState> {
-  const { botId, threadId, generation } = internalCapability;
-  const askedAt = Date.now();
+function sharedVpsSnapshot(bot: BotRecord) {
+  if (bot.vpsDesktopMode !== "shared") return { mode: "per-bot" as const };
+  const alias = vpsSshAliasForBot(cfg, bot);
+  const resource = alias ? sharedVpsResource(alias) : "";
+  return describeSharedDesktop({
+    alias, holder: alias ? turnResources.holder(resource) ?? null : null,
+    waiting: alias ? turnResources.waiting(resource) : [],
+    personControls: alias ? computerControl.snapshot(sharedVpsControlKey(alias)).held : false, recovering: alias ? sharedVpsSeat.recovering(alias) : false,
+    botFor: (owner) => {
+      const found = store.botByThread(owner.threadId) ?? store.bots.find(candidate => activeVpsThreads.get(candidate.id)?.has(owner.threadId) &&
+        candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === alias);
+      return found ? { id: found.id, name: found.name } : null;
+    },
+  });
+}
+
+async function computerCallGate(internalCapability: InternalCapability, signal?: AbortSignal, call?: ReturnType<typeof yourComputerCallFrom>, query?: URLSearchParams): Promise<ControlState> {
+  const { botId, threadId, generation } = internalCapability; const askedAt = Date.now();
+  if (query?.has("phase")) return { held: true, helpOpen: false, blockedReason: "Client desktop lifecycle reports are not accepted" };
   const deadline = askedAt + COMPUTER_CALL_WAIT_MS;
   let personHeld = false;
   for (;;) {
@@ -5783,7 +5731,8 @@ async function computerCallGate(internalCapability: InternalCapability, signal?:
       } else if (personHeld) {
         return { held: true, helpOpen, blockedReason: CONTROL_HANDED_BACK };
       } else {
-        return Date.now() - askedAt > COMPUTER_CALL_ACT_WITHIN_MS ? { held: true, helpOpen, blockedReason: CONTROL_WAITED } : { held: false, helpOpen };
+        if (Date.now() - askedAt > COMPUTER_CALL_ACT_WITHIN_MS) return { held: true, helpOpen, blockedReason: CONTROL_WAITED };
+        return { held: false, helpOpen };
       }
     }
     if (Date.now() >= deadline || signal?.aborted || !internalCapabilityIsActive(internalCapability)) return held;
@@ -5914,14 +5863,18 @@ async function mountBotVps(
   opts: { start: boolean; onClaimed: (capture: () => Promise<{ png: string; format: string }>) => void; onRejected?: (failure: string) => void },
 ) {
   const botVpsConfig = vpsConfigForBot(cfg, bot);
-  const vpsResource = `computer:vps:${vpsSshAliasForBot(cfg, bot)}:${bot.id}`;
-  const remote = await (opts.start ? vps.vpsComputerAction("provision", botVpsConfig, bot.id) : vps.inspectVpsForAuto(botVpsConfig, bot.id));
+  const desktopId = vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot));
+  if (bot.vpsDesktopMode === "shared" && boatLifecycleBusyBots.has(desktopId)) {
+    throw new Error("The shared VPS desktop is being changed; retry after setup finishes");
+  }
+  const vpsResource = `computer:vps:${vpsSshAliasForBot(cfg, bot)}:${desktopId}`;
+  const remote = await (opts.start ? vps.vpsComputerAction("provision", botVpsConfig, desktopId) : vps.inspectVpsForAuto(botVpsConfig, desktopId));
   if (!remote?.ready || !remote.sshAlias) return { problem: remote?.problem ?? null, reachable: remote?.daemonUp === true, outdated: vpsDesktopOutdated(remote) };
   const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
-  const vpsMcp = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
-  const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation);
+  const vpsMcp = vps.vpsComputerMcp(targetCfg, desktopId, remote.container_id ?? undefined, bot.vpsDesktopMode === "shared");
+  const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation, bot.vpsDesktopMode === "shared" ? { sharedVps: { alias: remote.sshAlias, container: remote.container_id! } } : {});
   // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
-  const vpsCapture = () => vps.vpsComputerScreenshot(targetCfg, bot.id);
+  const vpsCapture = () => bot.vpsDesktopMode === "shared" ? sharedVpsPreview(sharedVpsGateway, { alias: remote.sshAlias!, container: remote.container_id! }, () => sharedVpsSeat.currentOwner(remote.sshAlias!) === `${owner.threadId}:${owner.generation}`) : vps.vpsComputerScreenshot(targetCfg, desktopId);
   autoVmClaims.set(owner.threadId, {
     owner,
     lazy: true,
@@ -6010,6 +5963,11 @@ function managedBoatOwners(): boat.ManagedBoatOwner[] {
       Boolean(routines?.activeRunForBot(bot.id)) ||
       activeVpsThreads.has(bot.id) ||
       computerControl.snapshot(bot.id).held,
+  })), ...(vpsSshAlias(cfg) ? [vpsSshAlias(cfg)!] : []).map(alias => ({
+    botId: sharedVpsOwnerId(alias), name: "Shared VPS Desktop", inUse: Boolean(
+      turnResources.holder(sharedVpsResource(alias)) || turnResources.waiting(sharedVpsResource(alias)).length ||
+      computerControl.snapshot(sharedVpsControlKey(alias)).held,
+    ),
   })), ...teamComputers.list().map(computer => ({
     botId: teamComputerOwner(computer.id), name: computer.name, inUse: teamComputerInUse(computer),
   }))];
@@ -6086,7 +6044,7 @@ async function computerPreviewSurface(bot: BotRecord, threadId?: string) {
   if (plan.computer !== undefined) return plan.computer === "off" && plan.browser ? "browser" : plan.computer;
   const instance = registry.get(bot.modelSelection.instanceId);
   if (bot.cloudBackend === "vps") {
-    const remote = await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id);
+    const remote = await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot)));
     if (remote.ready || vpsDesktopOutdated(remote)) return "cloud";
   }
   const target = localVmTargetForStatus(bot.id, threadId);
@@ -6120,7 +6078,7 @@ async function selectableComputers(bot: BotRecord) {
       else if (toolsLeaveOut && surface !== "browser") reason = toolsLeaveOut;
       else if (surface === "cloud") {
         if (bot.cloudBackend === "vps") {
-          const status = canWorkOnCloud(cloudEngine(instance)) ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id) : null;
+          const status = canWorkOnCloud(cloudEngine(instance)) ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot))) : null;
           ready = status?.ready === true;
           canStart = Boolean(status?.daemonUp && status.managed && status.container === "stopped" &&
             status.image && status.imageMatches && status.network === "private" && status.mounts === "none" && status.security === "hardened");
@@ -6267,6 +6225,17 @@ function claimBotComputerLifecycle(botId: string, allowPreview = false): () => v
 }
 
 function claimManagedVpsMutation(containerName: string): () => void {
+  const sharedAlias = vpsSshAlias(cfg) && vps.vpsContainerName(sharedVpsOwnerId(vpsSshAlias(cfg)!)) === containerName
+    ? vpsSshAlias(cfg) : null;
+  if (sharedAlias) {
+    const resource = sharedVpsResource(sharedAlias);
+    if (vps.vpsLifecycleBusy() || turnResources.holder(resource) || turnResources.waiting(resource).length ||
+        store.bots.some(bot => bot.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, bot) === sharedAlias && activeVpsThreads.has(bot.id)) ||
+        computerControl.snapshot(sharedVpsControlKey(sharedAlias)).held) {
+      throw Object.assign(new Error("The shared VPS desktop is in use — stop all turns and release control first"), { status: 409 });
+    }
+    return claimBotComputerLifecycle(sharedVpsOwnerId(sharedAlias));
+  }
   const owner = store.bots.find((candidate) => vps.vpsContainerName(candidate.id) === containerName);
   if (!owner) return () => {};
   const ownerState = managedBoatOwners().find((candidate) => candidate.botId === owner.id);
@@ -6948,9 +6917,7 @@ bus.subscribe((event: RuntimeEvent) => {
             finalScreenFrame(bot.id, event.threadId),
             new Promise<null>((resolve) => { timeout = setTimeout(() => resolve(null), SCREEN_SETTLE_TIMEOUT_MS); }),
           ]).then((frame) => {
-            if (frame && isCurrent()) {
-              store.insertMessageAfter(event.threadId, settleLeafId, { role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
-            }
+            if (frame && isCurrent() && screenshotWasRequested(store.activePath(event.threadId))) store.insertMessageAfter(event.threadId, settleLeafId, { role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
           }).catch(() => {}).finally(() => {
             clearTimeout(timeout);
           });
@@ -8485,6 +8452,7 @@ async function startTurn(
       const computerPromptKind = resolveComputerPromptKind({
         kind: computerKind,
         vmPrivate: localVmMode(cfg) === "per-bot",
+        vpsShared: bot.vpsDesktopMode === "shared",
       });
       const coordinationNode = opts?.coordination ? coordinator.node(opts.coordination.id) : undefined;
       if (opts?.coordination && (!coordinationNode || coordinationNode.status !== "running" || roomHandoffProblem(coordinationNode,
@@ -9211,7 +9179,8 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
           };
         }
 
-        const vpsInventory = await vps.listManagedVpsComputers(vpsConfigForBot(cfg, bot), managedBoatOwners());
+        const vpsInventory = await vps.listManagedVpsComputers(vpsConfigForBot(cfg, bot), managedBoatOwners(), undefined,
+          bot.vpsDesktopMode === "shared" ? vpsAliasesInPlay(cfg, [bot]) : undefined);
         // A server that cannot answer never keeps the bot: it is deleted, and the answer says what may be left there.
         const vpsLeftOn = vpsInventory.configured && !vpsInventory.available ? vpsSshAliasForBot(cfg, bot) : null;
         const ownedVpsComputers = vpsInventory.instances.filter((instance) => instance.ownerBotId === bot.id);
@@ -9243,7 +9212,7 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
             }
           }
           for (const instance of ownedVpsComputers) {
-            await vps.removeManagedVpsComputer(vpsConfigForBot(cfg, bot), managedBoatOwners(), instance.name, instance.name);
+            await vps.removeManagedVpsComputer({ vps: { sshAlias: instance.vpsAlias } }, managedBoatOwners(), instance.name, instance.name);
           }
           if (localVmCleanup) {
             if (localVmCleanup.removeContainer) {
@@ -10303,6 +10272,7 @@ async function runClaimedGroupMemberTurn(
   const roomComputerPromptKind = resolveComputerPromptKind({
     kind: roomTeamComputer || roomComputerKind === "box" ? "box" : roomVmTarget ? "vm" : roomComputerKind,
     vmPrivate: localVmMode(cfg) === "per-bot",
+    vpsShared: readyBot.vpsDesktopMode === "shared",
   });
   {
     const crossing = claimRecallCrossings(threadId, recentLines.filter((line) => line.private).map((line) => line.threadId));
@@ -12314,6 +12284,7 @@ ROUTES.push(createBotOrderRoutes({ store, visibleFor: (auth) => visibleTo(viewer
 ROUTES.push(createBotPatchRoutes({
   store, cfg, registry, sessions, browserRuntime, browserLive, memoryUpkeep, cacheKeepWarm, hostedModels, supportsApprovalMode,
   routines: () => routines, activeVpsThreads,
+  sharedVpsControlHeld: bot => bot.vpsDesktopMode === "shared" && computerControl.snapshot(botComputerControlKey(bot)).held,
   hostedWorkspace: HOSTED_WORKSPACE, hostedFullAccessRefusal: HOSTED_FULL_ACCESS_REFUSAL, desktopManaged: DESKTOP_MANAGED, maxWorkspaceBots: MAX_WORKSPACE_BOTS,
   broadcast, wireBot, publicGroupState, audienceChanged, storedAvatarExists, requestedTaskBot, threadBusy, activeGroupTurnForBot,
   checkedModelSelection, engineSwitchNeedsAsk, currentBrowserSession, interruptAllDirectThreads, cancelGroupTurnOperations,
@@ -12547,7 +12518,7 @@ ROUTES.push(createMcpServerRoutes({
   cloudHome: CLOUD_HOME,
   fallbackPublicUrl: FALLBACK_PUBLIC_URL,
   mcpConfigBusy: { get: () => mcpConfigBusy, set: (busy) => { mcpConfigBusy = busy; } },
-  mcpServerResponse, mcpPolicyRefusal, persistMcpServers, savedCustomDomain, appCatalog: chatAppsMcp, forgetPeople: (name) => teamConnections.forgetServer(name), health: mcpServersHost.health, botsPath: () => brokerPath(botBox),
+  mcpServerResponse, mcpPolicyRefusal, persistMcpServers, savedCustomDomain, appCatalog: chatAppsMcp, forgetPeople: (name) => teamConnections.forgetServer(name), health: mcpServersHost.health, restart: (name) => mcpServersHost.restart(name), forgetRestart: (name) => mcpServersHost.forgetRestart(name), botsPath: () => brokerPath(botBox),
   connectionsChanged: (change) => void routineHolds?.connections(change) }));
 ROUTES.push(createSetupImportRoutes({ local: DESKTOP_MANAGED && !CLOUD_HOME && !HOSTED_WORKSPACE, cfg, mcpPolicyRefusal, persistMcpServers,
   mcpConfigBusy: { get: () => mcpConfigBusy, set: (busy) => { mcpConfigBusy = busy; } } }));
@@ -12951,11 +12922,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (auth.kind === "session" && !sessions.isLive(auth.session.id)) {
         return json(res, 401, { error: "Your session ended. Sign in again before creating a pairing code." });
       }
-      const requested: unknown = body?.scopes;
-      const scopes = Array.isArray(requested) ? requested.filter((v): v is Scope => v === "admin" || v === "client") : undefined;
+      const requested = pairingRequest(body, auth.kind === "session" ? auth.session.scopes : undefined);
+      if ("error" in requested) return json(res, requested.status, { error: requested.error });
       let opened: ReturnType<typeof sessions.openPairing>;
       try {
-        opened = sessions.openPairing({ label: typeof body?.label === "string" ? body.label : undefined, scopes });
+        opened = sessions.openPairing(requested);
       } catch (error) {
         if ((error as { code?: unknown }).code === "cloud_personal") return json(res, 403, { error: (error as Error).message, code: "cloud_personal" });
         throw error;
@@ -13127,7 +13098,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? "phone"
         : path.startsWith("/api/internal/connectors/")
         ? "connectors"
-        : path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
+        : path === SHARED_VPS_MCP_PATH || path === "/api/internal/computer-control" || path === "/api/internal/computer/mcp" || path === COMPUTER_JOURNAL_PATH
           ? "computer"
           : "agents";
       if (internalCapability.kind !== requiredCapabilityKind) {
@@ -14758,17 +14729,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.writeHead(upstream.status, headers);
         return res.end(Buffer.from(withScopeHint(proactive.fence.confines(internalCapability.threadId) ? recordsAnswer(upstream.bytes, upstream.contentType) : upstream.bytes, upstream.contentType, connectorCalls.map((call) => call.slug))));
       }
-      if (path === "/api/internal/computer-control") {
-        const botId = url.searchParams.get("botId") ?? "";
-        const bot = store.bot(botId);
-        if (!bot) return json(res, 404, { error: "no such bot" });
-        if (method === "GET") { savedSteps.gateChecked(internalCapability);
-          const abort = new AbortController();
-          res.once("close", () => { if (!res.writableEnded) abort.abort(); });
-          return json(res, 200, await computerCallGate(internalCapability, abort.signal, yourComputerCallFrom(url.searchParams)));
-        }
-        return json(res, 405, { error: "method not allowed" });
-      }
+      const computerReply = await internalComputerRoutes({ req, res, url, path, method, auth, json, readBody, capability: internalCapability, readInternalBody });
+      if (computerReply !== PASS) return;
       if (method === "POST" && path === "/api/internal/connectors/request") {
         const body = await readInternalBody();
         const botId = String(body.botId ?? "");
@@ -15401,7 +15363,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const teamComputer = inheritedTeamComputer(bot);
       if (teamComputer) return json(res, 200, { surface, backend: "box", teamComputer: { id: teamComputer.id, name: teamComputer.name }, ...(await boat.boatStatus(cfg, teamComputerOwner(teamComputer.id))) });
       return bot.cloudBackend === "vps"
-        ? json(res, 200, { surface, backend: "vps", ...(await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id)) })
+        ? json(res, 200, { surface, backend: "vps", ...(await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot)))), sharedDesktop: sharedVpsSnapshot(bot) })
         : json(res, 200, { surface, backend: "box", ...(await boat.boatStatus(cfg, bot.id)) });
     }
     // The person's take and release; the bot has no verb here, only a sign-in request its card settles.
@@ -15427,6 +15389,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "controlLeaseId is invalid" });
         }
         const controlLeaseId = leaseResult?.data;
+        const alias = currentBot.cloudBackend === "vps" && currentBot.vpsDesktopMode === "shared"
+          ? vpsSshAliasForBot(cfg, currentBot) : null;
+        if (alias) {
+          const answer = await sharedVpsSeat.respondHttp(res, {
+            alias, action, lease: controlLeaseId, session: auth.kind === "session" ? auth.session.id : "loopback",
+            changing: boatLifecycleBusyBots.has(sharedVpsOwnerId(alias)) || vps.vpsLifecycleBusy(),
+            valid: () => {
+              const current = store.bot(bot.id);
+              return current?.cloudBackend === "vps" && current.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, current) === alias &&
+                (auth.kind !== "session" || sessions.isLive(auth.session.id));
+            },
+          });
+          return answer ? json(res, answer.status, answer.body) : undefined;
+        }
         if (action === "release") cloudComputerPower.renew(controlKey);
         if (action === "take" && (boatLifecycleBusyBots.has(bot.id) || boatLifecycleBusyBots.has(controlKey))) {
           return json(res, 409, { error: "this bot's cloud computer is being changed — wait before taking control" });
@@ -15460,7 +15436,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const closedViewers = auth.kind === "session" ? desktopViewer.closeForOwner(auth.session.id, bot.id) : 0;
-      if (bot.cloudBackend === "vps") return json(res, 200, vps.closeVpsDesktopTunnel(bot.id));
+      if (bot.cloudBackend === "vps") return json(res, 200, vps.closeVpsDesktopTunnel(vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot))));
       return json(res, 200, { closed: closedViewers > 0 });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot|remove)$/);
@@ -15477,8 +15453,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
+      const desktopId = bot.cloudBackend === "vps" ? vpsDesktopOwnerId(bot, vpsSshAliasForBot(cfg, bot)) : botId;
       if (m[2] === "join" && bot.cloudBackend === "vps") {
-        for (let pending; (pending = vpsJoinRequests.get(botId));) await pending;
+        for (let pending; (pending = vpsJoinRequests.get(desktopId));) await pending;
       }
       const remoteProvider: RemoteComputerProvider = bot.cloudBackend === "vps" ? "vps" : "box";
       if (computerProviderConfigTransitions.has(remoteProvider)) {
@@ -15506,14 +15483,27 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         } finally { release(); if (m[2] !== "sleep") cloudComputerPower.used(key); }
       }
       if (bot.cloudBackend === "vps") {
+        const sharedAlias = bot.vpsDesktopMode === "shared" ? vpsSshAliasForBot(cfg, bot) : null; if (sharedAlias && sharedVpsSeat.recovering(sharedAlias) && !["recover", "screenshot"].includes(m[2]!)) return json(res, 409, { error: "Recover the shared desktop before changing its lifecycle" });
+        if (m[2] === "recover") { if (!sharedAlias) return json(res, 400, { error: "Recovery requires a shared desktop" }); const body = await readBody(req); if (body.confirmStop !== true) return json(res, 400, { error: "Confirm stopping running work before recovery" }); const release = claimBotComputerLifecycle(desktopId); try { await recoverSharedVps(sharedVpsGateway, sharedVpsSeat, cfg, sharedAlias); return json(res, 200, { ok: true }); } finally { release(); } }
         if (m[2] === "screenshot") {
           res.setHeader("cache-control", "private, no-store");
-          return json(res, 200, await computerPreviews.capture(botId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), botId)));
+          const status = sharedAlias ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), desktopId) : null;
+          if (sharedAlias && !status?.ready) return json(res, 409, { error: status?.problem ?? "The shared desktop is not ready" });
+          return json(res, 200, sharedAlias && status?.container_id ? { ...(await sharedVpsPreview(sharedVpsGateway, { alias: sharedAlias, container: status.container_id }, () => auth.kind !== "session" || sessions.isLive(auth.session.id))), ...sharedVpsSeat.frame(sharedAlias) } : await computerPreviews.capture(desktopId, () => vps.vpsComputerScreenshot(vpsConfigForBot(cfg, bot), desktopId)));
         }
-        const releaseComputerLifecycle = claimBotComputerLifecycle(botId, m[2] === "join");
+        if (sharedAlias && m[2] === "remove") return json(res, 409, { error: "Manage the shared VPS desktop from Settings → Computers; removing a bot never removes it" });
+        if (sharedAlias && m[2] === "join" && !sharedVpsSeat.allows(sharedAlias, auth.kind === "session" ? auth.session.id : "loopback")) {
+          return json(res, 409, { error: "Take control before opening the shared desktop" });
+        }
+        if (sharedAlias && m[2] === "sleep" && (turnResources.holder(sharedVpsResource(sharedAlias)) ||
+            turnResources.waiting(sharedVpsResource(sharedAlias)).length ||
+            store.bots.some(candidate => candidate.vpsDesktopMode === "shared" && vpsSshAliasForBot(cfg, candidate) === sharedAlias && activeVpsThreads.has(candidate.id)))) {
+          return json(res, 409, { error: "The shared VPS desktop is in use; wait for all bots and the person to release it" });
+        }
+        const releaseComputerLifecycle = claimBotComputerLifecycle(sharedAlias ? desktopId : botId, m[2] === "join");
         // Settles only after the lane is released, so a waiter can claim it.
         let joinSettled: (() => void) | undefined;
-        if (m[2] === "join") vpsJoinRequests.set(botId, new Promise(resolve => { joinSettled = resolve; }));
+        if (m[2] === "join") vpsJoinRequests.set(desktopId, new Promise(resolve => { joinSettled = resolve; }));
         try {
           if (m[2] === "exec") {
             return json(res, 409, { error: "the VPS console is available to the bot through its scoped computer tools" });
@@ -15525,17 +15515,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return json(res, 409, { error: "the VPS computer is being used by this bot — interrupt the turn first" });
           }
           if (m[2] === "join") {
-            const remote = auth.kind !== "loopback";
-            const result = await vps.vpsComputerJoin(vpsConfigForBot(cfg, bot), botId, undefined, remote);
+            const remote = Boolean(sharedAlias) || auth.kind !== "loopback";
+            const result = await vps.vpsComputerJoin(vpsConfigForBot(cfg, bot), desktopId, undefined, remote);
             return json(res, 200, { ...result, joinUrl: remote
               ? desktopViewerUrl(`vps/${botId}`, bot.threadId) : result.joinUrl });
           }
           const action = m[2] === "provision" ? "provision" : m[2] === "remove" ? "remove" : "stop";
-          return json(res, 200, await vps.vpsComputerAction(action, vpsConfigForBot(cfg, bot), botId));
+          return json(res, 200, await vps.vpsComputerAction(action, vpsConfigForBot(cfg, bot), desktopId));
         } finally {
           releaseComputerLifecycle();
           if (joinSettled) {
-            vpsJoinRequests.delete(botId);
+            vpsJoinRequests.delete(desktopId);
             joinSettled();
           }
         }
@@ -15731,7 +15721,7 @@ function runtimeHoldsRoot(threadId: string): boolean {
 
 const gracefulShutdown = createGracefulShutdown({
   cleanup: [
-    () => {
+    async () => {
       followupsReady = false;
       companyShutdown = true;
       // Before any provider is torn down, so what the teardown fails stays cut for the next start.
@@ -15743,6 +15733,7 @@ const gracefulShutdown = createGracefulShutdown({
       sharedComputers.close(); deviceLinks.close();
       phones.close();
       sharedComputerControl.close();
+      sharedVpsSeat.close(); await sharedVpsGateway.close();
       browserLive.closeAll();
       desktopViewer.closeAll();
       upgrades.close();
