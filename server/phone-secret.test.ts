@@ -115,7 +115,7 @@ describe("PhoneSecretBridge", () => {
     const material = await keyMaterial();
     const bridge = new PhoneSecretBridge(() => true, 200);
     bridge.receive(material.message);
-    const envelope = await seal({ ...baseContext(material.keyId), target: "customSecret" }, material.publicKey, "legacy-domain-canary", "OpenMausBot phone credential v1");
+    const envelope = await seal({ ...baseContext(material.keyId), target: "customSecret" }, material.publicKey, "legacy-domain-canary", "OpenBot phone credential v1");
     await expect(bridge.open(envelope)).resolves.toBe("legacy-domain-canary");
     await expect(bridge.open({ ...envelope, deviceId: "other-device" })).rejects.toMatchObject({ message: "The encrypted credential could not be verified" });
     await expect(bridge.open({ ...envelope, botId: "other-bot" })).rejects.toMatchObject({ message: "The encrypted credential could not be verified" });

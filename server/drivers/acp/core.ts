@@ -53,10 +53,10 @@ import { supportsApprovalMode } from "../../../shared/approval-mode.ts";
 import { MAX_QUESTION_TEXT, parseAskQuestions, parseChoices, questionAnswersByQuestion } from "../../../shared/ask-question.ts";
 
 import { appendNative } from "../native.ts";
-import { acpSessionOperationKey, acpShellRequest, answersAlone, permissionLaunchCwd } from "../permission-command.ts"; import { acpReadPaths } from "../../own-file-reads.ts";
+import { acpDesktopTool, acpSessionOperationKey, acpShellRequest, answersAlone, permissionLaunchCwd } from "../permission-command.ts"; import { acpReadPaths } from "../../own-file-reads.ts";
 import { openQuestionRequest, questionRequestFor, type AcpQuestionRequest } from "./question-requests.ts";
 import { commandSummary, toolDetailPreview } from "../../tool-summary.ts";
-import { acpToolEndEvents } from "./tool-items.ts";
+import { acpToolEndEvents } from "./tool-items.ts"; import { screenshotWasRequested } from "../../screenshot-request.ts";
 import { AcpHost } from "./host.ts";
 import { endTurn, trackRunningTool, type AcpAskFinish, type AcpSession, type AcpTurn } from "./turn-state.ts";
 import { recoveryPromptFor } from "../../resume-recovery.ts";
@@ -768,8 +768,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             });
           }
           const kind = String(toolCall.kind ?? "");
+          const desktopTool = acpDesktopTool(toolCall);
           const operationKey = isQuestion || current.controlsHost ? null : acpSessionOperationKey(toolCall);
-          if (operationKey && answersAlone(toolCall.rawInput?.command) && sessionAllows.get(threadId)?.has(operationKey)) {
+          if (operationKey && (desktopTool || answersAlone(toolCall.rawInput?.command)) && sessionAllows.get(threadId)?.has(operationKey)) {
             const allow = optionFor("allow");
             if (allow) {
               return send({ jsonrpc: "2.0", id: msg.id, result: { outcome: { outcome: "selected", optionId: allow } } });
@@ -796,7 +797,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             if (!current.asks.delete(requestId)) return "unavailable";
             clearTimeout(timer);
             const want = behavior === "allow" ? "allow" : "reject";
-            const forSession = want === "allow" && always === true && !isQuestion && !current.controlsHost;
+            const forSession = want === "allow" && always === true && !isQuestion && !current.controlsHost && !desktopTool;
             const picked = askQuestions
               ? questionAnswersByQuestion(message ?? "", askQuestions)[askQuestions[0]!.question] ?? message
               : message;
@@ -810,7 +811,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                 : forSession
                   ? optionAlways ?? optionFor("allow")
                   : optionFor(want);
-            if (forSession && !optionAlways && optionId && operationKey) {
+            if (optionId && operationKey && want === "allow" && always === true && (desktopTool || forSession && !optionAlways)) {
               const remembered = sessionAllows.get(threadId) ?? new Set<string>();
               remembered.add(operationKey);
               sessionAllows.set(threadId, remembered);
@@ -881,7 +882,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const finished = u.status === "completed" || u.status === "failed";
           const toolEnded = (itemId: string | undefined) => {
             current.state.producedItem = true;
-            for (const event of acpToolEndEvents(u, itemId, current.endedToolIds)) emit({ ...base(threadId, current.turnId), ...event });
+            for (const event of acpToolEndEvents(u, itemId, current.endedToolIds, screenshotWasRequested([{ role: "user", text: current.turn.text }]))) emit({ ...base(threadId, current.turnId), ...event });
           };
           switch (u.sessionUpdate) {
             case "agent_message_chunk": {
@@ -983,8 +984,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         acp.inbound = {
           request: (msg) => {
             const current = session.current;
-            if (!current) refuse(msg, send);
-            else handleServerRequest(msg, current);
+            if (!current) return refuse(msg, send);
+            if (!current.state.promptSent && (msg.method === "session/request_permission" || questionRequestFor(support.questionRequests, msg.method))) {
+              current.state.startupActivity = true;
+              return refuse(msg, send);
+            }
+            handleServerRequest(msg, current);
           },
           notification: handleNotification,
           busy: () => Boolean(session.current?.asks.size || session.current?.runningTools.size),
@@ -1191,6 +1196,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
         const interrupt = () => {
           state.stopped = true;
+          for (const finish of Array.from(current.asks.values())) finish("cancel", "system");
           if (session.sessionId) {
             session.acp.send({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: session.sessionId } });
             if (current.interruptTimer) clearTimeout(current.interruptTimer);
@@ -1511,7 +1517,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             }
             const reason = result?.stopReason;
             if (reason === "end_turn") settle(threadId, session, true, null);
-            else if (reason === "cancelled" || state.stopped) settle(threadId, session, true, "cancelled");
+            else if (reason === "cancelled" || state.stopped) settle(threadId, session, state.stopped, "cancelled");
             else {
               const errorMessage = typeof result?.error === "string" && result.error
                 ? result.error
