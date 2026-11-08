@@ -144,11 +144,11 @@ describe("CI concurrency", () => {
     expect(gate).toContain('gh release view "v$current"');
     const validate = steps.find((step) => step.name === "Verify installer and update feed")!.run!;
     expect(validate).toContain("release/latest.yml");
-    expect(validate).toContain("entry.sha512");
+    expect(validate).toContain("node scripts/windows-release.mjs validate release");
     expect(steps.find((step) => step.name === "Verify packaged browser and server")!.run).toContain("smoke-packaged-server.mjs");
     const publish = steps.find((step) => step.name === "Publish updater-compatible GitHub Release")!.run!;
-    expect(publish).toContain('gh release create "v$VERSION"');
-    expect(publish).toContain('gh release edit "v$VERSION"');
+    expect(publish).toContain('sha256sum "OpenBot-$VERSION-setup.exe" > SHA256SUMS.txt');
+    expect(publish).toContain("node scripts/windows-release.mjs publish release");
   });
 
   it("builds the Windows Defender check's installer exactly as the release's Windows job does", () => {
