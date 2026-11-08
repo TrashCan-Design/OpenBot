@@ -5,6 +5,7 @@ import { vpsContainerMcpArgs, vpsDockerArgs } from "./vps-computer.ts";
 import { DATA_DIR } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { prepareVpsSsh } from "./vps-ssh.ts";
+import { annotateSandboxInputResult, foregroundSandboxInput } from "./sandbox-desktop-input.ts";
 
 const [alias, containerName] = process.argv.slice(2);
 const sshAlias = alias ?? "";
@@ -35,4 +36,6 @@ if (process.env.OMB_VPS_RECONNECT === "1") {
     const params = frame && typeof frame === "object" ? (frame as { params?: { name?: unknown } }).params : undefined;
     return typeof params?.name === "string" ? { tool: params.name } : {};
   } } } : {}),
+  prepareLine: foregroundSandboxInput,
+  rewriteResponse: annotateSandboxInputResult,
 });

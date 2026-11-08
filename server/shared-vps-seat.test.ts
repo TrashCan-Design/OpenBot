@@ -274,6 +274,36 @@ describe("shared VPS desktop ownership", () => {
     seat.close();
   });
 
+  it("keeps each owner's look and retains unknown-operation recovery barriers", async () => {
+    vi.useFakeTimers();
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl());
+    try {
+      const alpha = { threadId: "alpha", generation: "one" };
+      const beta = { threadId: "beta", generation: "two" };
+      resources.claim(resource, alpha);
+      seat.note(alias, "alpha:one");
+      seat.note(alias, "beta:two");
+      expect(seat.admit(alias, "alpha:one", "operation-alpha")).toBe("ok");
+      resources.release(alpha);
+      expect(seat.recovering(alias)).toBe(true);
+      vi.advanceTimersByTime(45_000);
+      // A timed-out reply is still an unknown outcome; only explicit recovery may clear its journal barrier.
+      expect(seat.recovering(alias)).toBe(true);
+      await seat.recover(alias, async () => {});
+      expect(seat.recovering(alias)).toBe(false);
+      resources.claim(resource, beta);
+      expect(seat.admit(alias, "beta:two", "operation-beta")).toBe("stale");
+      seat.note(alias, "beta:two");
+      expect(seat.admit(alias, "beta:two", "operation-beta-2")).toBe("ok");
+      seat.finish(alias, "beta:two", "operation-beta-2");
+      resources.release(beta);
+    } finally {
+      seat.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("releases only the revoked session's seat", async () => {
     const resources = new TurnResources();
     const seat = new SharedVpsSeat(resources, new ComputerControl());

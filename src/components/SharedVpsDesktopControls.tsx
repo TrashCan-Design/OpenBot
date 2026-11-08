@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 export interface SharedDesktopState {
   mode: "shared" | "per-bot";
@@ -10,11 +11,14 @@ export interface SharedDesktopState {
   waitingQueue?: Array<{ id: string; name: string }>;
 }
 
-export function SharedVpsStatusLine<T extends { ready: boolean; sharedDesktop?: SharedDesktopState }>(props: {
+export function SharedVpsStatusLine<T extends { ready: boolean; sharedDesktop?: SharedDesktopState; memoryBytes?: number }>(props: {
   active: boolean;
   ready: boolean;
   botId: string;
   desktop?: SharedDesktopState;
+  memoryBytes?: number;
+  memoryHostBytes?: number;
+  memoryDeferred?: boolean;
   refresh: () => Promise<T>;
   onStatus: (status: T) => void;
   control: { owned: boolean; pending: boolean; position: number | null; take(): void; release(): void; cancel(): void };
@@ -71,7 +75,10 @@ export function SharedVpsStatusLine<T extends { ready: boolean; sharedDesktop?: 
   const availability = !props.ready ? "Offline" : props.desktop?.recovering ? "Recovery required" : owns ? "You have control" : props.desktop?.controller === "person" ? "A person has control" : props.desktop?.activeBot ? `${props.desktop.activeBot.name} is using it` : "Ready";
   return (
     <div className="mb-2 rounded-lg bg-card px-3 py-2 text-[12px] text-ink-secondary" aria-live="polite">
-      <span className="font-medium text-ink">Shared VPS Desktop</span><span className="ml-2">{availability}</span><span className="ml-2">{owns ? "Input is on" : "Input is off"}</span>
+      <span className="font-medium text-ink">Shared VPS Desktop</span>
+      {typeof props.memoryBytes === "number" && props.memoryBytes > 0 ? <span>{` · ${(props.memoryBytes / 1024 / 1024 / 1024).toFixed(props.memoryBytes % (1024 * 1024 * 1024) === 0 ? 0 : 1)} GiB RAM`}</span> : null}
+      {props.memoryDeferred && typeof props.memoryBytes === "number" && typeof props.memoryHostBytes === "number" ? <div className="mt-1">{t("computer.shared.memoryDeferred", { current: (props.memoryBytes / 1024 / 1024 / 1024).toFixed(props.memoryBytes % (1024 ** 3) === 0 ? 0 : 1), host: (props.memoryHostBytes / 1024 / 1024 / 1024).toFixed(props.memoryHostBytes % (1024 ** 3) === 0 ? 0 : 1) })}</div> : null}
+      <span className="ml-2">{availability}</span><span className="ml-2">{owns ? "Input is on" : "Input is off"}</span>
       {waitingForControl && <span className="ml-2">Queued for control{position ? `: position ${position}` : ""}</span>}
       {waiting.length > 0 && <div className="mt-1">Waiting: {waiting.map(entry => entry.name).join(", ")}</div>}
       <div className="mt-2 flex flex-wrap gap-2">

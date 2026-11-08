@@ -68,7 +68,7 @@ interface VpsComputerStatus {
   imageMatches: boolean;
   managed: boolean;
   container: "running" | "stopped" | "missing";
-  ready: boolean;
+  ready: boolean; memoryBytes?: number; memoryHostBytes?: number; memoryDeferred?: boolean;
   problem: string | null;
   sharedDesktop?: {
     mode: "shared" | "per-bot";
@@ -142,13 +142,15 @@ export function ComputerPanel({
   const liveTask = profileBot.tasks?.find((task) => task.threadId === profileBot.threadId);
   const livePlace = effectivePlace(profileBot, liveTask);
   const threadBot = currentTaskBot(profileBot);
-  const connectionKey = `${profileBot.id}:${profileBot.threadId}:${livePlace}:${profileBot.cloudBackend ?? "box"}:${profileBot.vpsDesktopMode ?? "per-bot"}:${threadBot.modelSelection.instanceId}`;
+  const connectionKey = `${profileBot.id}:${profileBot.threadId}:${livePlace}:${profileBot.cloudBackend ?? "box"}:${profileBot.vpsDesktopMode ?? "per-bot"}`;
+  const surfaceQueryKey = `${connectionKey}:${threadBot.modelSelection.instanceId}:${threadBot.modelSelection.model ?? ""}`;
   const [autoSurface, setAutoSurface] = useState<{ key: string; surface: Bot["computer"] } | null>(null);
   const autoSurfaceCurrent = autoSurface?.key === connectionKey;
   const surfaceReady = livePlace !== "auto" || autoSurfaceCurrent;
   const bot = { ...threadBot, computer: livePlace === "auto"
     ? autoSurfaceCurrent ? autoSurface.surface : undefined : livePlace };
   const viewerConnectionKey = `${bot.id}:${bot.threadId}:${bot.computer}:${bot.cloudBackend ?? "box"}:${bot.vpsDesktopMode ?? "per-bot"}`;
+  const desktopEpoch = useRef("");
   const viewerConnection = useRef(viewerConnectionKey);
   viewerConnection.current = viewerConnectionKey;
   const desktopJoin = useRef<AbortController | null>(null);
@@ -282,7 +284,6 @@ export function ComputerPanel({
   useEffect(() => {
     if (livePlace !== "auto" || !computerSelectionPersisted) return;
     const controller = new AbortController();
-    setAutoSurface(null);
     void api(threadPath("computer"), { signal: controller.signal }).then((status) => {
       if (controller.signal.aborted) return;
       const surface = status.surface;
@@ -295,7 +296,7 @@ export function ComputerPanel({
       setPhase("error");
     });
     return () => controller.abort();
-  }, [connectionKey, livePlace, computerSelectionPersisted, threadPath, retry]);
+  }, [surfaceQueryKey, connectionKey, livePlace, computerSelectionPersisted, threadPath, retry]);
   const vmResumable = phase === "vm-unavailable" && vmStatus?.resumable === true;
   const vmReadinessAttempts = useRef(0);
   const vmActionController = useRef<AbortController | null>(null);
@@ -394,16 +395,12 @@ export function ComputerPanel({
   useEffect(() => {
     if (panelView !== "computer") return;
     let alive = true;
-    setResolvedComputerSelection(null);
-    setTeamComputer(null);
-    setPhase("checking");
-    setPolledFrame(null);
-    setPreviewError(null);
-    setVmFrame(null);
-    setVmStatus(null);
-    setVpsStatus(null);
-    setLocalFrame(null);
-    setError(null);
+    const desktopKey = `${viewerConnectionKey}:${state.config?.vps?.sshAlias ?? ""}`;
+    if (desktopEpoch.current !== desktopKey) {
+      desktopEpoch.current = desktopKey;
+      setResolvedComputerSelection(null); setTeamComputer(null); setPhase("checking"); setPolledFrame(null); setPreviewError(null);
+      setVmFrame(null); setVmStatus(null); setVpsStatus(null); setLocalFrame(null); setError(null);
+    }
     // The selection may be optimistic: never let it choose a provider until the PATCH confirms server state.
     if (!computerSelectionPersisted || !surfaceReady) return;
     if (bot.computer === undefined) {
@@ -1151,7 +1148,7 @@ export function ComputerPanel({
     if (mode === "local" && approvalModeFor(profileBot) === "auto") {
       setLocalAutoWarningTarget(bot.id);
     }
-    else if (mode === "cloud") updateComputerSelection({ computer: mode, cloudBackend: "vps" });
+    else if (mode === "cloud") updateComputerSelection({ computer: mode, cloudBackend: "vps", ...(profileBot.cloudBackend === "vps" || profileBot.vpsDesktopMode ? {} : { vpsDesktopMode: "shared" as const }) });
     else if (mode === "browser") updateComputerSelection({ computer: mode, browser: true });
     else updateComputerSelection({ computer: mode });
   };
@@ -1320,7 +1317,7 @@ export function ComputerPanel({
             )}
             {computerStatusCurrent && bot.computer === "cloud" && cloudBackend === "vps" && (phase === "ready" || phase === "starting") && !liveHere && <span className="text-[11px]">{t("computer.badge.vps")}</span>}
         </div>
-        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} botId={bot.id} desktop={vpsStatus?.sharedDesktop} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} control={{ owned: takeover.here, pending: takeover.waiting, position: takeover.queuePosition, take: () => void takeControl(), release: () => void handBack(), cancel: takeover.leave }} />
+        <SharedVpsStatusLine active={panelView === "computer" && cloudBackend === "vps" && bot.vpsDesktopMode === "shared" && computerStatusCurrent} ready={vpsStatus?.ready === true} botId={bot.id} desktop={vpsStatus?.sharedDesktop} memoryBytes={vpsStatus?.memoryBytes} memoryHostBytes={vpsStatus?.memoryHostBytes} memoryDeferred={vpsStatus?.memoryDeferred} refresh={() => api(threadPath("computer"), { background: true }) as Promise<VpsComputerStatus>} onStatus={setVpsStatus} control={{ owned: takeover.here, pending: takeover.waiting, position: takeover.queuePosition, take: () => void takeControl(), release: () => void handBack(), cancel: takeover.leave }} />
         <div className={cn("relative flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card", liveHere && "ring-2 ring-accent")}>
           {liveHere && liveTarget ? (
             <Suspense fallback={<Loader2 size={18} className="animate-spin text-ink-secondary" />}>

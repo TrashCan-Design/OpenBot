@@ -470,7 +470,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   it("shares a canceled preview with retries and opens control without racing destructive actions", async () => {
     expect((await api("PUT", "/api/config", { vps: { sshAlias: "production-vps" } })).status).toBe(200);
     const bot = (await api("POST", "/api/bots")).body.bot;
-    await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud", cloudBackend: "vps" });
+    await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud", cloudBackend: "vps", vpsDesktopMode: "per-bot" });
     const fixtureDir = dirname(dockerLog);
     const hold = join(fixtureDir, "hold-capture");
     const started = join(fixtureDir, "capture-started");
@@ -530,7 +530,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect((await api("PUT", "/api/config", { vps: { sshAlias: "production-vps" } })).status).toBe(200);
     const bot = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${bot.id}`, {
-      computer, cloudBackend: "vps", modelSelection: { instanceId: "vps", model: "fake-model" },
+      computer, cloudBackend: "vps", vpsDesktopMode: "per-bot", modelSelection: { instanceId: "vps", model: "fake-model" },
     });
     const fixtureDir = dirname(dockerLog);
     const hold = join(fixtureDir, "hold-capture");
@@ -629,7 +629,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         name: "Remote hand",
         modelSelection: { instanceId: "vps", model: "fake-model" },
       });
-      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "vps" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "vps", vpsDesktopMode: "per-bot" })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud" })).status).toBe(200);
 
       const fixtureDir = dirname(dockerLog);
@@ -888,10 +888,10 @@ for await (const line of createInterface({ input: process.stdin })) {
       writeFileSync(join(dirname(dockerLog), "container.name.alpha-vps"), alphaName);
       writeFileSync(join(dirname(dockerLog), "container.name.production-vps"), betaName);
 
-      expect((await api("PATCH", `/api/bots/${alpha.id}`, { cloudBackend: "vps" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${alpha.id}`, { cloudBackend: "vps", vpsDesktopMode: "per-bot" })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${alpha.id}`, { vpsAlias: "alpha-vps" })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${alpha.id}`, { computer: "cloud" })).status).toBe(200);
-      expect((await api("PATCH", `/api/bots/${beta.id}`, { cloudBackend: "vps" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${beta.id}`, { cloudBackend: "vps", vpsDesktopMode: "per-bot" })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${beta.id}`, { computer: "cloud" })).status).toBe(200);
       expect((await botById(alpha.id)).vpsAlias).toBe("alpha-vps");
       expect((await botById(beta.id)).vpsAlias).toBeUndefined();
@@ -980,7 +980,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const leaving = (await api("POST", "/api/bots")).body.bot;
     const switching = (await api("POST", "/api/bots")).body.bot;
     for (const bot of [leaving, switching]) {
-      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "vps" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "vps", vpsDesktopMode: "per-bot" })).status).toBe(200);
       expect((await api("PATCH", `/api/bots/${bot.id}`, { vpsAlias: "gone-vps" })).status).toBe(200);
     }
     // The provider cancelled the server, or the alias left ~/.ssh/config: nothing answers for gone-vps any more.
