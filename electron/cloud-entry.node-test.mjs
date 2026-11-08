@@ -82,7 +82,7 @@ test("once ready, open-url and a second instance open immediately and consume th
   assert.equal(h.entry.fromArgs(commandLine), true);
   await settle();
   assert.deepEqual(h.calls, ["reveal", "open", "reveal", "open"]);
-  assert.deepEqual(commandLine, ["C:\\OpenMausBot.exe", "--flag"]);
+  assert.deepEqual(commandLine, ["C:\\OpenBot.exe", "--flag"]);
 });
 
 test("anything else is left to the other link handlers without revealing or opening", async () => {

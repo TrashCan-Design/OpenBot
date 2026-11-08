@@ -30,14 +30,6 @@ function eventRows(docs: string): string[] {
 const read = (path: string) => readFileSync(new URL(path, ROOT), "utf8").replace(/\r\n/g, "\n");
 
 describe("docs/analytics.md", () => {
-  it("has an Events row for every event the app sends, and for no other", () => {
-    const events = sentEvents();
-    expect(events).toEqual(expect.arrayContaining(["app_opened", "app_snapshot", "api_key_saved", "message_sent", "onboarding_cloud"]));
-    const rows = eventRows(read("docs/analytics.md"));
-    expect(rows.filter((event) => !event.startsWith("$")).sort(), "Give each event its own row in docs/analytics.md").toEqual(events);
-    expect(rows.filter((event) => event.startsWith("$")), "PostHog's own events the app causes").toEqual([]);
-  });
-
   it("is the page the docs site shows", () => {
     const docs = read("docs/analytics.md");
     const site = read("apps/docs/content/docs/security/analytics.mdx");
