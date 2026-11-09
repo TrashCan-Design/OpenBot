@@ -18,7 +18,7 @@ export class SharedVpsSeat {
   private readonly journal: SharedVpsJournal;
   private readonly draining = new Set<string>();
   private readonly epoch = new Map<string, number>();
-  private readonly seen = new Map<string, { epoch: number; owner: string }>();
+  private readonly seen = new Map<string, Map<string, number>>();
   private readonly resources: TurnResources;
   private readonly control: ComputerControl;
   private readonly onRelease: (alias: string) => void | Promise<void>;
@@ -192,8 +192,7 @@ export class SharedVpsSeat {
   /** A mutation was allowed onto the desktop. finish must name the same owner once that call's result is known. */
   admit(alias: string, owner: string, id: string, target = ""): "ok" | "recovering" | "stale" {
     if (this.recovering(alias) || this.currentOwner(alias) !== owner) return "recovering";
-    const seen = this.seen.get(alias);
-    if (!seen || seen.epoch !== this.version(alias) || seen.owner !== owner) return "stale";
+    if (this.seen.get(alias)?.get(owner) !== this.version(alias)) return "stale";
     return this.journal.add({ id, alias, owner, target }) ? "ok" : "recovering";
   }
 
@@ -204,8 +203,12 @@ export class SharedVpsSeat {
 
   version(alias: string): number { return this.epoch.get(alias) ?? 0; }
 
+  /** A successful desktop look is remembered per owner; another owner's look does not replace it. */
   note(alias: string, owner: string, epoch = this.version(alias)): void {
-    if (epoch === this.version(alias) && this.currentOwner(alias) === owner && !this.recovering(alias)) this.seen.set(alias, { epoch, owner });
+    if (epoch !== this.version(alias) || this.recovering(alias)) return;
+    let owners = this.seen.get(alias);
+    if (!owners) this.seen.set(alias, owners = new Map());
+    owners.set(owner, epoch);
   }
 
   finish(alias: string, owner: string, id: string): void {

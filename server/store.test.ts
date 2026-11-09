@@ -409,6 +409,18 @@ describe("Store", () => {
     expect(reloaded.taskByThread(bot.id, autoMismatch.threadId)!.surface).toBeUndefined();
   });
 
+  it("drops an automatic computer pin when that conversation changes model", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    store.patchTask(bot.id, bot.threadId, { surface: "cloud", surfaceSource: "auto" });
+    store.switchTaskModel(bot.id, bot.threadId, { instanceId: "codex", model: "fixture" }, false, false);
+    expect(store.taskByThread(bot.id, bot.threadId)?.surface).toBeUndefined();
+    expect(store.taskByThread(bot.id, bot.threadId)?.surfaceSource).toBeUndefined();
+    store.patchTask(bot.id, bot.threadId, { surface: "local", surfaceSource: "user" });
+    store.switchTaskModel(bot.id, bot.threadId, { instanceId: "claude", model: "opus" }, false, false);
+    expect(store.taskByThread(bot.id, bot.threadId)).toMatchObject({ surface: "local", surfaceSource: "user" });
+  });
+
   it("leaves bots.json alone when a save changes nothing, and writes the next real change", () => {
     const file = join(DATA_DIR, "bots.json");
     const store = new Store(selection);

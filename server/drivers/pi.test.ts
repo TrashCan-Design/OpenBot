@@ -681,6 +681,23 @@ describe("PiDriver turns (fake CLI)", () => {
     expect(message).toBe("Standing rules.\n\nMemory: likes quiet hours.\n\nbare");
   });
 
+  it("stops a turn whose saved session cannot be reopened", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-pi-resume-error-"));
+    const dump = join(dir, "dump.jsonl");
+    await create("session-error", { FAKE_PI_DUMP: dump });
+    const { turnId } = await instance.adapter.sendTurn({
+      threadId: "t-pi-resume-error-" + randomUUID(),
+      text: "continue the desktop task",
+      resumeCursor: "/fake/missing-session.json",
+    });
+    const done = await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+    expect(done).toMatchObject({ ok: false });
+    expect(recorder.events.find((event) => event.type === "runtime.error")).toMatchObject({
+      message: "Pi could not reopen the saved session, so this turn was stopped.",
+    });
+    expect(readFileSync(dump, "utf8")).not.toContain("continue the desktop task");
+  });
+
   it("waits for a slow new_session reply before it sends the prompt, and says so in the chat", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-pi-session-slow-"));
     const dump = join(dir, "dump.jsonl");
