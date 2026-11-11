@@ -12,6 +12,7 @@
 | 2026-11-06 (Asia/Kolkata, 9:58 PM) | `8d56ad4ef8440057e101f8c8f1dd4d7389a43c29` | `00f053431a9b9b4c605cf6a286e6b39da8881f78` | Upstream `HEAD` is still `8d56ad4` (merge of #4635, 9:08 PM IST). Nothing newer. From the range since `a51e2ab`, ported: data-lane interrupt redelivery (`b400065`), CLI send conversation selection (#4577), pairing TTL and CI tokens (#4579), `doctor --host` adapted for the Windows app and a desktop-only VM (#4580), explicit stdio MCP (#4574), and command-MCP restart without rewriting saved keys (`57b4fb0`, `6d25919`). Not ported: Brazilian Portuguese, larger Ollama context, the encrypted phone connection (#4561), MausBot Relay (#4565, #4575), SMTP sign-in (#4582), Command Code (#4624), Responses fallback (#4184), local-model text tool calls (#4180), Boat file copy and background exec (#4553, #4567), page map data (#4563), hosted HTTPS/tunnel (#4617, #4626), and the Admin connector (#4609, #4621, #4625, #4635). Those connector and tunnel commits require upstream's Admin or cloud-home deploy path. |
 | 2026-11-07 (Asia/Kolkata) | `a149c8735be6f40b4db79e4315958495ae5678a8` | `2b3e8d8e8db3dce7e390e17c5c12511313c0b3a2` | First-parent commits since `8d56ad4`: team sleep (#4642), no send cap (#4676), rail local workspace (#4677), release v0.1.144 (#4685), signed-in ends hold (#4681), cloud local MCP (#4640), box install (#4622), box launcher (#4589), stuck states (#4648), Antigravity cloud sign-in (#4678), room pages view-only (#4612), email providers (#4696), OpenCode model refresh (#4698). None are ported in the shared-desktop observation change. They are hosted-cloud, box/admin, release, locale-unrelated UI, or engine-catalog work. |
 | 2026-11-07 (Asia/Kolkata, later) | `1bc4749aa8307d7d6998bf86de4ef6478460dd93` | `375aff47f7674bb6e4ef0a82875bf08cc60b5aa9` | First-parent commits since `a149c873`: voice-note parking (#4700, #4711, #4712), OpenCode discovery and thread capability (#4706, #4699), chat-engine tool mounting (#4701), cloud-computer start errors (#4709), phone routes (#4695, #4724), engine self-update (#4713), relay usage (#4689), workspace rail (#4718, #4727), HighLevel removal (#4637), releases 0.1.145 and 0.1.146. None ported. The OpenCode capability fix is that engine's shared process, not this fork's desktop viewer. Screenshot delivery, sandbox typing, Thinking, the Windows overlay, and Grok import are implemented from this fork's own paths. The shared desktop asks for 6 GiB only after Docker reports that container as ours and `docker info` shows at least 1.5 GiB left on the host; a higher or unlimited cap is left alone and the container is not recreated. |
+| 2026-11-11 (UTC) | `6199598` | `1ef9616956622a69550f5d7869f93270deb371cc` | Reviewed upstream releases v0.1.147 through v0.1.152 (HEAD `6199598`). Candidate bug fixes identified for porting: OpenRouter reasoning token limit stalling long turns, connected app connection error isolation so whole turn does not crash, Codex model provider startup, linked files >25MB save disclosure, and host sandbox isolation hardening. Excluded/skipped: Meeting Notes guest bot integration, MausBot Cloud queue optimizations and Starter tier bot limits, Relay/phone connections, auto-updating engine binaries, and vendor engine connectors (Kiro, ModelGo). |
 
 The fork retains local and self-hosted features. Upstream changes that require
 MausBot-hosted accounts, billing, or Boat computers are not ported.
@@ -75,3 +76,25 @@ upstream fixes are pending in that range. This scoped correction connects the
 fork's successful installer branch to its own GitHub Release feed, shares
 publication validation with the existing main-branch release workflow, and
 adds regression tests. No application feature or vendor service is added.
+
+## Upstream sync — 11 November 2026 (UTC)
+
+Checked official upstream `milind-soni/OpenMausBot` main through release `v0.1.152`
+(HEAD `6199598`) against fork base `1ef9616956622a69550f5d7869f93270deb371cc`
+(`codex/windows-installer`).
+
+Reviewed 6 release batches (v0.1.147 through v0.1.152). Identified candidate bug
+fixes to evaluate for porting:
+1. OpenRouter reasoning token limit stalling long turns (`server/drivers/openrouter.ts` / `server/drivers/openai-chat-turn.ts`).
+2. Connected app connection error isolation so a tool failure does not crash the entire turn (`server/drivers/agents-call.ts`).
+3. Codex engine model provider startup configuration (`server/drivers/codex.ts`).
+4. Linked files > 25MB save disclosure and proper storage handling (`server/routes/attachments.ts`).
+5. Host sandbox isolation hardening on shared Linux/cloud hosts (`server/engine-homes/box.linux.ts`).
+
+Banned functionality skipped per fork policy:
+- MausBot Cloud heavy load queue optimizations and Starter tier bot limits (hosted cloud infrastructure).
+- Guest Meeting Notes bot integration (external meeting bots for Google Meet / Teams / Jitsi).
+- Secondary relay server and phone connection balancing (Relay / phone routes).
+- Runtime engine auto-updates (auto-updating engine binaries).
+- External vendor engine additions (Kiro, ModelGo).
+- Non-essential UI skins (Aurora, Diwali).
