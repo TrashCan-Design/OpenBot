@@ -313,12 +313,16 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
 
   const watchServer = (everyMs: number, stop: (reason: Error) => void) => {
     let misses = 0;
+    let inFlight = false;
     const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
       fetch(`${options.apiUrl}/models`, { headers: { authorization: `Bearer ${options.apiKey}` }, signal: AbortSignal.timeout(everyMs) })
         .then((response) => { misses = 0; void response.body?.cancel(); })
         .catch(() => {
           if (++misses === LIVENESS_MISSES) stop(new Error(`The model server at ${new URL(options.apiUrl).host} stopped answering, so the reply was stopped.`));
-        });
+        })
+        .finally(() => { inFlight = false; });
     }, everyMs);
     timer.unref();
     return timer;
@@ -713,7 +717,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
                 if (!resend) throw new ChatProtocolError(requestTooLargeMessage(options.models().options.find((option) => option.id === model)?.label ?? model));
                 messages.splice(0, messages.length, ...resend.messages);
                 resized = true;
-                emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "request_too_large" });
+                emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt: ++attempt, delayMs: 0, reason: "request_too_large" });
                 continue;
               }
               // A refused tool call ran nothing, so the request goes again, but not once answer text streamed.

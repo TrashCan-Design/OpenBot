@@ -160,6 +160,7 @@ export class SharedVpsGateway {
     try {
       for (const entry of this.connections.values()) if (entry.key.startsWith(this.key(target) + ":")) await this.retire(target, entry);
       this.cached.delete(this.key(target));
+      this.captures.delete(this.key(target));
       await this.seat.recover(target.alias, stopAndStart);
     } finally { this.recovery.delete(target.alias); }
   }
@@ -167,6 +168,6 @@ export class SharedVpsGateway {
     this.closed = true;
     for (const entry of this.connections.values()) clearTimeout(entry.timer);
     await Promise.allSettled([...this.connections.values()].map(entry => entry.backend.close()));
-    this.connections.clear(); this.cached.clear();
+    this.connections.clear(); this.cached.clear(); this.captures.clear();
   }
 }

@@ -22,6 +22,19 @@ describe("shared VPS desktop ownership", () => {
     seat.close();
   });
 
+  it("recovers drain state even when viewer release rejects", async () => {
+    const resources = new TurnResources();
+    const seat = new SharedVpsSeat(resources, new ComputerControl(), () => Promise.reject(new Error("viewer failed")));
+    await seat.take(alias, person);
+    expect(seat.recovering(alias)).toBe(false);
+    seat.release(alias, person);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seat.recovering(alias)).toBe(false);
+    await expect(seat.take(alias, "another-person")).resolves.toMatchObject({ held: true, owned: true });
+    seat.close();
+  });
+
   it("uses one stable per-host container for multiple bots and preserves per-bot names", () => {
     const alpha = { id: "alpha", vpsDesktopMode: "shared" as const };
     const beta = { id: "beta", vpsDesktopMode: "shared" as const };

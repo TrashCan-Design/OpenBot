@@ -184,7 +184,7 @@ export class SharedVpsSeat {
       if (this.pending(alias) === 0) this.finishDrain(alias);
     };
     const closing = this.onRelease(alias);
-    if (closing && typeof closing.then === "function") void closing.then(finish).catch(() => {});
+    if (closing && typeof closing.then === "function") void Promise.resolve(closing).finally(finish).catch(() => {});
     else finish();
     return true;
   }
