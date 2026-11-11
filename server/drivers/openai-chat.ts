@@ -373,7 +373,19 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         if (messages.some((entry) => entry.reasoning_content !== undefined) && rejectsReasoningReplay(response.status, body)) {
           throw new UnsupportedReasoningReplayError(message);
         }
-        throw new Error(message);
+        let retryAfterMs: number | undefined;
+        if (response.status === 429) {
+          const retryHeader = response.headers.get("retry-after");
+          const seconds = retryHeader ? Number(retryHeader) : null;
+          const retryMatch = (!Number.isFinite(seconds) || (seconds ?? 0) <= 0) && body ? /try again in (\d+(?:\.\d+)?)s/i.exec(body) : null;
+          const retrySec = Number.isFinite(seconds) && (seconds ?? 0) > 0 ? seconds! : (retryMatch ? Number(retryMatch[1]) : null);
+          if (retrySec && Number.isFinite(retrySec) && retrySec > 0) {
+            retryAfterMs = Math.min(Math.round(retrySec * 1000), 90_000);
+          }
+        }
+        const httpError = new Error(message);
+        if (retryAfterMs !== undefined) (httpError as unknown as { retryAfterMs: number }).retryAfterMs = retryAfterMs;
+        throw httpError;
       }
       noteKeyAccepted(options.apiUrl, options.apiKey);
 
@@ -723,7 +735,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
               // Once a call has been handled, never replay it through a turn retry.
               if (options.retryScale === undefined || abort.signal.aborted || streamed || seenCalls.size ||
                   error instanceof ChatProtocolError || !verdict.transient || attempt >= RETRY_MAX_ATTEMPTS - 1) throw error;
-              const delayMs = computeBackoff(attempt++);
+              const delayMs = (error as { retryAfterMs?: number }).retryAfterMs ?? computeBackoff(attempt++);
               emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt, delayMs, reason: verdict.reason });
               await interruptibleDelay(delayMs * options.retryScale, abort.signal).promise;
               abort.signal.throwIfAborted();

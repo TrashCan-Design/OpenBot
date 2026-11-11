@@ -1,6 +1,6 @@
 // Providers such as Grok narrate before tools.
 import { useEffect, useState } from "react";
-import { Check, ChevronRight } from "lucide-react";
+import { Check, ChevronRight, Loader2 } from "lucide-react";
 import { useTurnLive } from "@/state/turn-status";
 
 export function ThinkingText({ text }: { text: string }) {
@@ -24,6 +24,7 @@ export function TurnNarrationRun({
 }) {
   const live = useTurnLive(threadId);
   const reasoning = live.turnId === turnId ? live.reasoning : undefined;
+  const isLive = live.turnId === turnId && !live.ended;
   const [open, setOpen] = useState(forceOpen);
   useEffect(() => {
     if (forceOpen) setOpen(true);
@@ -37,10 +38,14 @@ export function TurnNarrationRun({
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           aria-label={label}
-          title={title ?? (open ? "Hide progress messages" : "Show progress messages")}
+          title={title ?? (open ? "Hide thinking and progress" : "Show thinking and progress")}
           className="ui-pill"
         >
-          <Check size={13} className="text-success" />
+          {isLive ? (
+            <Loader2 size={13} className="animate-spin text-ink-secondary" />
+          ) : (
+            <Check size={13} className="text-success" />
+          )}
           <span>{label}</span>
           <ChevronRight size={13} className={open ? "rotate-90" : undefined} />
         </button>

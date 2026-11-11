@@ -57,6 +57,7 @@ export function GrokImportFlow({ link = null, onPreview, onAdded, bare }: {
       setAdding(true);
       setError("");
       try {
+        if (!importKey.current) importKey.current = crypto.randomUUID();
         const response = await addTemplate(pending.manifest, dispatch, importKey.current);
         if (!response.first) return setPending(null);
         setAdded(response.first);
