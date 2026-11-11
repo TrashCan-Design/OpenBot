@@ -79,22 +79,21 @@ adds regression tests. No application feature or vendor service is added.
 
 ## Upstream sync — 11 November 2026 (UTC)
 
-Checked official upstream `milind-soni/OpenMausBot` main through release `v0.1.152`
-(HEAD `6199598`) against fork base `1ef9616956622a69550f5d7869f93270deb371cc`
+Checked official upstream `milind-soni/OpenMausBot` releases `v0.1.139` through `v0.1.153`
+(`6f226f15d`) against fork base `1ef9616956622a69550f5d7869f93270deb371cc`
 (`codex/windows-installer`).
 
-Reviewed 6 release batches (v0.1.147 through v0.1.152). Identified candidate bug
-fixes to evaluate for porting:
-1. OpenRouter reasoning token limit stalling long turns (`server/drivers/openrouter.ts` / `server/drivers/openai-chat-turn.ts`).
-2. Connected app connection error isolation so a tool failure does not crash the entire turn (`server/drivers/agents-call.ts`).
-3. Codex engine model provider startup configuration (`server/drivers/codex.ts`).
-4. Linked files > 25MB save disclosure and proper storage handling (`server/routes/attachments.ts`).
-5. Host sandbox isolation hardening on shared Linux/cloud hosts (`server/engine-homes/box.linux.ts`).
+Ported bug fixes:
+1. Unified 100 MB upload / attachment limit (`66ccb6da6`): `shared/upload-limits.ts`, `server/message-file.ts`, `server/attachments.ts`, `server/bot-attachment.ts`, and `src/lib/composer-attachments.ts`. Prevents 25 MB size failures when attaching large bot-generated files and videos, keeping 25 MB `PREVIEW_MAX_BYTES` strictly for in-memory streaming players.
+2. Browser CDP detached session hang fix (`6656cb410`): `server/browser/cdp/connection.ts` immediately rejects `waitFor()` on detached sessions rather than timing out after 30 seconds.
+3. Browser CDP command cleanup on transport failure (`780faf821`): `server/browser/cdp/connection.ts` cleans up pending commands and clears timers when transport send throws.
+4. Browser CDP prompt cleanup on renderer detach (`41204110d`): `server/browser/cdp/auth.ts` and `server/browser/cdp/dialogs.ts` clear pending dialogs/challenges when renderer detaches.
+5. Browser CDP document lifecycle stale event filter (`661e62ff6`): `server/browser/cdp/wait.ts` ignores lifecycle events from older documents during navigation.
+6. Shared VPS Desktop recovery lease cleanup: `server/shared-vps-seat.ts` clears timer and releases control lease during `finishDrain` on recovery.
 
-Banned functionality skipped per fork policy:
-- MausBot Cloud heavy load queue optimizations and Starter tier bot limits (hosted cloud infrastructure).
-- Guest Meeting Notes bot integration (external meeting bots for Google Meet / Teams / Jitsi).
-- Secondary relay server and phone connection balancing (Relay / phone routes).
-- Runtime engine auto-updates (auto-updating engine binaries).
-- External vendor engine additions (Kiro, ModelGo).
-- Non-essential UI skins (Aurora, Diwali).
+Banned upstream features skipped per fork policy:
+- MausBot Cloud queue balancing, Starter tier bot limits, and hosted infrastructure (`#5358`, `#5340`).
+- Boat cloud VM integrations, provisioned remote cloud machines, and billing routes.
+- MausBot Relay tunnels (`serve --relay`, `#5353`, `#5357`).
+- External guest meeting bots (Google Meet / Teams / Jitsi).
+- Runtime engine binary auto-updates and vendor engine additions (ModelGo, Kiro).

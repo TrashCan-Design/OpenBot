@@ -287,8 +287,13 @@ export class SharedVpsSeat {
     const seat = this.seats.get(alias);
     this.seats.delete(alias);
     this.draining.delete(alias);
-    if (seat) this.resources.releaseOne(sharedVpsResource(alias), seat.owner);
-    else this.advance(alias);
+    if (seat) {
+      clearTimeout(seat.timer);
+      this.control.releaseLease(sharedVpsControlKey(alias), seat.owner.generation);
+      this.resources.releaseOne(sharedVpsResource(alias), seat.owner);
+    } else {
+      this.advance(alias);
+    }
   }
 
   close(): void {

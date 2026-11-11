@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ComputerControl } from "./computer-control.ts";
-import { sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
+import { sharedVpsControlKey, sharedVpsOwnerId, sharedVpsResource, vpsDesktopOwnerId } from "./shared-vps.ts";
 import { SharedVpsSeat } from "./shared-vps-seat.ts";
 import { TurnResources } from "./turn-resources.ts";
 
@@ -32,6 +32,21 @@ describe("shared VPS desktop ownership", () => {
     await Promise.resolve();
     expect(seat.recovering(alias)).toBe(false);
     await expect(seat.take(alias, "another-person")).resolves.toMatchObject({ held: true, owned: true });
+    seat.close();
+  });
+
+  it("recovers a seat held by a person and allows a new lease to take control", async () => {
+    const resources = new TurnResources();
+    const control = new ComputerControl();
+    const seat = new SharedVpsSeat(resources, control);
+    await seat.take(alias, person);
+    expect(seat.owns(alias, person)).toBe(true);
+    seat.block(alias);
+    await seat.recover(alias, async () => {});
+    expect(seat.owns(alias, person)).toBe(false);
+    expect(control.snapshot(sharedVpsControlKey(alias)).held).toBe(false);
+    await expect(seat.take(alias, "new-person-lease")).resolves.toMatchObject({ held: true, owned: true });
+    expect(seat.owns(alias, "new-person-lease")).toBe(true);
     seat.close();
   });
 
