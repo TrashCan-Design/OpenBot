@@ -419,7 +419,16 @@ The same registry lives in `~/.openmausbot/config.json`:
 }
 ```
 
-`type` is `http` (Streamable HTTP, the default) or `sse`. `oauth` is the
+`type` is `http` (Streamable HTTP, the default) or `sse`. A command entry may
+say `"type": "stdio"`, as other MCP clients write it; it changes nothing.
+`PATCH /api/mcp/servers/NAME` with `{ "restart": true }` reloads a command
+server on the next turn. Saved keys, sign-in, apps and which bot it belongs
+to stay. A server reached by an address has no process to restart, and one
+that is off has to be turned on first. The turn already talking to it keeps
+that process; the next turn starts the new one. A check that is still starting
+is not started again.
+
+`oauth` is the
 optional sign-in app; `clientSecret` and `scopes` may be left out. If you edit the file
 by hand, restart OpenMausBot. Every bot whose engine can mount custom MCP
 servers gets the enabled tools on its next task.

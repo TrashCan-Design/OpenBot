@@ -70,9 +70,10 @@ one of its conversations.
 | Command | What it does |
 |---|---|
 | `doctor [--wait 2m]` | Checks the server answers, is new enough, who you are to it (and when your session expires), that an engine is ready, and whether bots have a browser. |
+| `doctor --host [--desktop]` | Looks at this machine and does not change it. On Linux it checks a host for OpenBot and the bot sandbox. `--desktop` checks a VPS that only runs the remote desktop container and does not require the sandbox or Google Cloud CLI. On Windows it reports the local app. |
 | `bots`, `channels`, `models` | Your bots and what each is doing, your rooms, the engines and the models each offers. |
 | `messages TARGET [--limit 30]` | The latest messages of a conversation. |
-| `send TARGET TEXT` | Sends one message and returns at once. `--send-id ID` makes a retry safe: the same id never sends twice. |
+| `send TARGET TEXT` | Sends one message and returns at once. `--task current` (the default) uses the open conversation, `--task new` starts one (titled by `--title` or the first line), and `--task ID` selects that conversation. The reply names the conversation. `--send-id ID` makes a retry safe: the same id never sends twice. |
 | `run TARGET TEXT` | Gives a bot or room one job and waits until it is done (below). |
 | `wait TARGET` | Waits on work already running. |
 | `interrupt TARGET [--tree]` | Presses Stop. `--tree` also stops every teammate still working on its job, in that teammate's own conversation. |
@@ -81,6 +82,7 @@ one of its conversations.
 | `team apply FILE`, `team export --out FILE` | Makes the workspace match a team file, or writes one (below). |
 | `engine set KIND`, `engine list` | Gives the workspace an engine key without a screen (below). |
 | `connect [URL]` | Gets a token for a workspace elsewhere. |
+| `token create NAME --out FILE` | An access token for CI. It ends on `--expires` (default 90 days, at most the server's session limit), never renews, and is written only to FILE. `token list` and `token revoke ID` never print the token. `--scope client` is the default; a session cannot grant a scope it does not hold. |
 | `new-bot`, `new-channel`, `set-model`, `edit` | Make a bot or a room, change a bot's model, rewrite an earlier message. |
 | `mcp` | The OpenMausBot MCP server on stdin and stdout ([docs/mcp-server.md](mcp-server.md)). |
 
