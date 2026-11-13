@@ -28,12 +28,12 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - name: Set up JDK 17
-        uses: actions/setup-java@8df103947b19dc3f14dd0654bf2ec578ba3c784e # v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: "temurin"
           java-version: "17"
       - name: Setup Android SDK
-        uses: android-actions/setup-android@7eb8f15b81f33ee66cb834cf879e19d7d49ee42b # v3.2.1
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.1
       - name: Run unit tests
         run: |
           cd android
