@@ -66,7 +66,7 @@ describe("resolveSurface", () => {
 
   it("a computer destination mounts only that computer: one place per turn", () => {
     for (const destination of ["cloud", "vm", "local"] as const) {
-      expect(resolveSurface({ destination, browserOn: true })).toEqual({ computer: destination, browser: false, pinned: null, note: "" });
+      expect(resolveSurface({ destination, browserOn: true })).toEqual({ computer: destination, browser: true, pinned: null, note: "" });
       expect(resolveSurface({ destination, browserOn: false })).toMatchObject({ computer: destination, browser: false });
     }
   });
@@ -113,7 +113,7 @@ describe("resolveSurface", () => {
     for (const destination of ["browser", undefined] as const) {
       for (const pin of ["cloud", "vm", "local"] as const) {
         expect(resolveSurface({ destination, pinnedSurface: pin, browserOn: true }))
-          .toEqual({ computer: pin, browser: false, pinned: pin, note: "" });
+          .toEqual({ computer: pin, browser: true, pinned: pin, note: "" });
       }
     }
   });

@@ -25,9 +25,9 @@ const lastSuccessfulCatalog = new Map<string, ModelCatalog>();
 const freeModels = new Set<string>();
 const paidModels = new Set<string>();
 
-const DISCOVERY_TIMEOUT_MS = 20_000;
-const EFFORT_SURVEY_MS = 8_000;
-const DISCOVERY_PROBE_TTL_MS = 30_000;
+const DISCOVERY_TIMEOUT_MS = 4_000;
+const EFFORT_SURVEY_MS = 2_000;
+const DISCOVERY_PROBE_TTL_MS = 300_000;
 const discoveryProbeCache = new Map<string, { expiresAt: number; result: Promise<boolean> }>();
 
 export type OpenCodeCatalogLoader = (

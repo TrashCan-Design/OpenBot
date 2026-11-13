@@ -35,6 +35,7 @@ import {
   perBotLocalVmTarget,
   podmanSecurityIsHardened,
   SHARED_LOCAL_VM_TARGET,
+  SCREENSHOT_TRANSFER,
   setupCommands,
   type CommandRunner,
   type LocalVmTarget,
@@ -879,7 +880,7 @@ describe("Cua integration", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [screenshotCall]: "{}\n",
-      [`docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-preview.png`]: png.toString("base64"),
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: png.toString("base64"),
     });
 
     const image = await containerComputerScreenshot(fake.run, "linux");
@@ -907,12 +908,12 @@ describe("Cua integration", () => {
       [readinessRead]: png.toString("base64"),
       [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
         "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
-      [`docker exec ${CONTAINER} base64 -w0 /tmp/openmausbot-preview.png`]: png.toString("base64"),
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
     });
 
     const frame = await containerComputerFrame(fake.run, "linux");
 
-    expect(frame).toEqual({ png: png.toString("base64"), format: "png" });
+    expect(frame).toEqual({ png: png.toString("base64"), format: "jpeg" });
     expect(frame.png.startsWith("data:")).toBe(false);
   });
 });

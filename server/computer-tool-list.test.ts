@@ -34,14 +34,17 @@ describe("a turn's computer", () => {
     expect(CUA_DRIVER_041_LINUX_TOOLS).toHaveLength(66);
     const added = CUA_DRIVER_041_MACOS_TOOLS.filter((name) => !CUA_DRIVER_WINDOWS_TOOLS.includes(name));
     expect(added.sort()).toEqual(["browser_select", "get_guide", "install_extension", "parse_visual_regions", "run_script", "run_steps"]);
-    for (const name of ["run_steps", "run_script", "get_guide", "install_extension", "parse_visual_regions"]) {
+    for (const name of ["run_steps", "run_script"]) {
+      expect(listsComputerTool(name, false), name).toBe(true);
+    }
+    for (const name of ["get_guide", "install_extension", "parse_visual_regions"]) {
       expect(listsComputerTool(name, false), name).toBe(false);
     }
     expect(CUA_DRIVER_041_MACOS_TOOLS.filter((name) => listsComputerTool(name, true))).toEqual(
-      [...SCREEN_WORK].sort(),
+      [...SCREEN_WORK, "run_script", "run_steps"].sort(),
     );
     expect(CUA_DRIVER_041_LINUX_TOOLS.filter((name) => listsComputerTool(name, true))).toEqual(
-      [...SCREEN_WORK, "mouse_button_down", "mouse_button_up", "mouse_drag", "parallel_mouse_drag"].sort(),
+      [...SCREEN_WORK, "mouse_button_down", "mouse_button_up", "mouse_drag", "parallel_mouse_drag", "run_script", "run_steps"].sort(),
     );
     expect(listsComputerTool("browser_select", true)).toBe(false);
     expect(listsComputerTool("browser_select", false)).toBe(true);

@@ -1013,6 +1013,14 @@ export function wholeScreenshot(bytes: Buffer): ScreenshotCheck {
   };
 }
 
+export const SCREENSHOT_TRANSFER = `/opt/venv/bin/python -I -c 'import base64, io, sys
+from PIL import Image
+with Image.open(sys.argv[1]) as image:
+    image.thumbnail((1280, 720))
+    output = io.BytesIO()
+    image.convert("RGB").save(output, format="JPEG", quality=75)
+sys.stdout.write("jpeg:" + base64.b64encode(output.getvalue()).decode("ascii"))' "$1" 2>/dev/null || { base64 < "$1" | tr -d "\\n"; }`;
+
 export async function containerComputerFrame(
   runner: CommandRunner = sh,
   platform: NodeJS.Platform = process.platform,
@@ -1047,15 +1055,17 @@ export async function containerComputerFrame(
     );
     const { stdout } = await runner(
       status.runtime,
-      ["exec", target.containerName, "base64", "-w0", screenshot],
+      ["exec", target.containerName, "sh", "-c", SCREENSHOT_TRANSFER, "openmausbot-preview", screenshot],
       30_000,
     );
-    const data = stdout.trim();
+    const raw = stdout.trim();
+    const isJpegPrefix = raw.startsWith("jpeg:");
+    const data = isJpegPrefix ? raw.slice(5) : raw;
     const checked = wholeScreenshot(Buffer.from(data, "base64"));
     if (!checked.ok) {
       throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
     }
-    return { png: data, format: checked.mime === "image/jpeg" ? "jpeg" : "png" };
+    return { png: data, format: isJpegPrefix || checked.mime === "image/jpeg" ? "jpeg" : "png" };
   } catch (error) {
     if (cacheable) screenshotStatusCache.delete(target.key);
     throw error;

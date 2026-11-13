@@ -63,7 +63,7 @@ function placeOf(input: { destination: Destination; pinnedSurface?: Surface | nu
   if (destination === "off") {
     return { computer: "off", browser: false, pinned: null, note: OFF_NOTE };
   }
-  const beside = input.botOpened === true && browserOn;
+  const beside = browserOn;
   const pin = input.pinnedSurface ?? null;
   if (pin === "browser") {
     if (browserOn) return { computer: "off", browser: true, pinned: "browser", note: "" };

@@ -14,7 +14,7 @@ const DRIVER_UPKEEP: ReadonlySet<string> = new Set([
 
 /** Run many actions, or a script of them, in one call (0.41). Every screen action stays its own call, so each one gets
  * its own approval, guidance and result handling. */
-const BATCH_RUNNERS: ReadonlySet<string> = new Set(["run_steps", "run_script"]);
+const BATCH_RUNNERS: ReadonlySet<string> = new Set();
 
 function drivesItsOwnBrowser(name: string): boolean {
   return name.startsWith("browser_") || name === "get_browser_state" || name === "page";
