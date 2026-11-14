@@ -147,7 +147,7 @@ test("bots' work from now on comes to Documents/OpenBot/<bot>/<conversation>; ol
   s.cloud.put(recent.id, "plan.md", "the plan");
   s.cloud.put(old.id, "old.md", "old work");
   await s.service.pass();
-  const owl = join(s.home, "Documents", "MausBot", "Owl");
+  const owl = join(s.home, "Documents", "OpenBot", "Owl");
   assert.deepEqual(readdirSync(owl), ["Q3- plan-"]);
   assert.equal(readFileSync(join(owl, "Q3- plan-", "plan.md"), "utf8"), "the plan");
   assert.equal(s.service.state().outputs.folders, 1);

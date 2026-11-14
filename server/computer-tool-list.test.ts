@@ -25,7 +25,7 @@ describe("a turn's computer", () => {
   it("keeps every screen tool a lent screen lends, but not the cursor looks or the session read-backs it carries", () => {
     const lent = [...LENT_SCREEN_TOOLS].filter((name) => !DRIVER_BROWSER.includes(name));
     expect(lent.filter((name) => !listsComputerTool(name, true)).sort()).toEqual([
-      "escalate_session", "get_agent_cursor_state", "get_session_state", "set_agent_cursor_enabled", "set_agent_cursor_motion",
+      "escalate_session", "get_agent_cursor_state", "get_session_state", "set_agent_cursor_enabled", "set_agent_cursor_motion", "set_agent_cursor_style",
     ]);
   });
 
