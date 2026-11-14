@@ -283,7 +283,8 @@ export async function isWorkspaceRunning(options: CliOptions): Promise<boolean> 
     const { status, body } = await api(options.port, "/api/health");
     if (status !== 200 || (body?.app !== "openbot" && body?.app !== "openmausbot")) return false;
     const expected = readFileSync(join(options.dataDir, "environment-id"), "utf8").trim();
-    const descriptor = await api(options.port, "/.well-known/openbot/environment").then((res) => res.status === 200 ? res : api(options.port, "/.well-known/openmausbot/environment"));
+    const envPath = body?.app === "openmausbot" ? "/.well-known/openmausbot/environment" : "/.well-known/openbot/environment";
+    const descriptor = await api(options.port, envPath).then((res) => res.status === 200 ? res : api(options.port, envPath === "/.well-known/openbot/environment" ? "/.well-known/openmausbot/environment" : "/.well-known/openbot/environment"));
     return /^[0-9a-f-]{36}$/i.test(expected) && descriptor.status === 200 && descriptor.body?.environmentId === expected;
   } catch { return false; }
 }

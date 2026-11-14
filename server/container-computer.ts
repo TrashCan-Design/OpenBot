@@ -14,7 +14,7 @@ import { PIDS_LIMIT, raisePidsLimit } from "./container-limits.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 const run = promisify(execFile);
-const SCREENSHOT_STATUS_TTL_MS = 10_000;
+const SCREENSHOT_STATUS_TTL_MS = 60_000;
 
 export type CommandRunner = (
   command: string,
@@ -1021,55 +1021,71 @@ with Image.open(sys.argv[1]) as image:
     image.convert("RGB").save(output, format="JPEG", quality=75)
 sys.stdout.write("jpeg:" + base64.b64encode(output.getvalue()).decode("ascii"))' "$1" 2>/dev/null || { base64 < "$1" | tr -d "\\n"; }`;
 
+const pendingContainerFrames = new Map<string, Promise<{ png: string; format: "png" | "jpeg" }>>();
+
 export async function containerComputerFrame(
   runner: CommandRunner = sh,
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): Promise<{ png: string; format: "png" | "jpeg" }> {
   const cacheable = runner === sh && platform === process.platform;
-  const now = Date.now();
-  const cached = screenshotStatusCache.get(target.key);
-  const status =
-    cacheable && cached && cached.expiresAt > now
-      ? cached.status
-      : await containerComputerStatus(runner, platform, target);
-  if (!status.ready || !status.runtime) {
-    if (cacheable) screenshotStatusCache.delete(target.key);
-    throw Object.assign(new Error(status.problem ?? "The Local VM is not ready"), { status: 409 });
+  if (cacheable) {
+    const pending = pendingContainerFrames.get(target.key);
+    if (pending) return pending;
   }
-  if (cacheable) screenshotStatusCache.set(target.key, { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS });
-  try {
-    const screenshot = "/tmp/openmausbot-preview.png";
-    await runner(
-      status.runtime,
-      cuaExecArgs([
-        "call",
-        "get_desktop_state",
-        "{}",
-        "--socket",
-        CUA_SOCKET,
-        "--screenshot-out-file",
-        screenshot,
-      ], { container: target.containerName }),
-      30_000,
-    );
-    const { stdout } = await runner(
-      status.runtime,
-      ["exec", target.containerName, "sh", "-c", SCREENSHOT_TRANSFER, "openmausbot-preview", screenshot],
-      30_000,
-    );
-    const raw = stdout.trim();
-    const isJpegPrefix = raw.startsWith("jpeg:");
-    const data = isJpegPrefix ? raw.slice(5) : raw;
-    const checked = wholeScreenshot(Buffer.from(data, "base64"));
-    if (!checked.ok) {
-      throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
+
+  const capture = async (): Promise<{ png: string; format: "png" | "jpeg" }> => {
+    const now = Date.now();
+    const cached = screenshotStatusCache.get(target.key);
+    const status =
+      cacheable && cached && cached.expiresAt > now
+        ? cached.status
+        : await containerComputerStatus(runner, platform, target);
+    if (!status.ready || !status.runtime) {
+      if (cacheable) screenshotStatusCache.delete(target.key);
+      throw Object.assign(new Error(status.problem ?? "The Local VM is not ready"), { status: 409 });
     }
-    return { png: data, format: isJpegPrefix || checked.mime === "image/jpeg" ? "jpeg" : "png" };
-  } catch (error) {
-    if (cacheable) screenshotStatusCache.delete(target.key);
-    throw error;
-  }
+    if (cacheable) screenshotStatusCache.set(target.key, { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS });
+    try {
+      const screenshot = "/tmp/openmausbot-preview.png";
+      await runner(
+        status.runtime,
+        cuaExecArgs([
+          "call",
+          "get_desktop_state",
+          "{}",
+          "--socket",
+          CUA_SOCKET,
+          "--screenshot-out-file",
+          screenshot,
+        ], { container: target.containerName }),
+        30_000,
+      );
+      const { stdout } = await runner(
+        status.runtime,
+        ["exec", target.containerName, "sh", "-c", SCREENSHOT_TRANSFER, "openmausbot-preview", screenshot],
+        30_000,
+      );
+      const raw = stdout.trim();
+      const isJpegPrefix = raw.startsWith("jpeg:");
+      const data = isJpegPrefix ? raw.slice(5) : raw;
+      const checked = wholeScreenshot(Buffer.from(data, "base64"));
+      if (!checked.ok) {
+        throw Object.assign(new Error("Cua Driver returned an incomplete screenshot"), { status: 502 });
+      }
+      return { png: data, format: isJpegPrefix || checked.mime === "image/jpeg" ? "jpeg" : "png" };
+    } catch (error) {
+      if (cacheable) screenshotStatusCache.delete(target.key);
+      throw error;
+    }
+  };
+
+  if (!cacheable) return capture();
+  const promise = capture().finally(() => {
+    pendingContainerFrames.delete(target.key);
+  });
+  pendingContainerFrames.set(target.key, promise);
+  return promise;
 }
 
 export async function containerComputerScreenshot(

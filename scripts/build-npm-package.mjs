@@ -43,12 +43,12 @@ writeFileSync(
   join(out, "package.json"),
   JSON.stringify(
     {
-      name: "openmausbot",
+      name: "openbot",
       version: app.version,
       description: "Run the OpenBot server anywhere and pair your devices to it",
       license: "Apache-2.0",
       type: "module",
-      bin: { openmausbot: "cli.js" },
+      bin: { openbot: "cli.js", openmausbot: "cli.js" },
       // Never bundled, so npm installs them beside the server: DuckDB and
       // resvg are native addons that npm picks per platform from their
       // optional packages, and the 1Password SDK reads its WebAssembly core

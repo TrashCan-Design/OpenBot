@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  looksLikeThreadRefUrl,
   parseThreadRefUrl,
   remarkThreadRefs,
   resolveThreadRefAddress,
@@ -249,4 +250,11 @@ describe("canonical thread links", () => {
     }
   });
 
+  it("guards both openbot and openmausbot thread and bot links from external shell launch", () => {
+    expect(looksLikeThreadRefUrl("openbot://thread/abc")).toBe(true);
+    expect(looksLikeThreadRefUrl("openmausbot://thread/abc")).toBe(true);
+    expect(looksLikeThreadRefUrl("openbot://bot/scout")).toBe(true);
+    expect(looksLikeThreadRefUrl("openmausbot://bot/scout")).toBe(true);
+    expect(looksLikeThreadRefUrl("https://example.com")).toBe(false);
+  });
 });

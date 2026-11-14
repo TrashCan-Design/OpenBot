@@ -255,7 +255,7 @@ app.on("open-url", (event, url) => {
 
 app.on("second-instance", (_event, commandLine) => {
   if (takeOrganizationDeepLink(commandLine)) {
-    queueOrganizationEntry("openmausbot://organization");
+    queueOrganizationEntry("openbot://organization");
     return;
   }
   if (cloudEntry.fromArgs(commandLine)) return;
@@ -1528,7 +1528,7 @@ function refreshApplicationMenu() {
       onSwitch: (id) => void workspaceMenuAction(() => switchEnvironment(id)),
       onAddFromClipboard: () => void addServerFromClipboard(),
       onConnect: () => void workspaceMenuAction(openWorkspaceSettings),
-      onOrganizationSignIn: () => queueOrganizationEntry("openmausbot://organization"),
+      onOrganizationSignIn: () => queueOrganizationEntry("openbot://organization"),
       onForget: (id) => void workspaceMenuAction(() => forgetEnvironment(id)),
       onOpenSettings: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("app:open-settings"); },
       openAtLogin: loginItem.available() ? { checked: loginItem.chosen(), onToggle: on => { loginItem.choose(on); refreshApplicationMenu(); } } : null,

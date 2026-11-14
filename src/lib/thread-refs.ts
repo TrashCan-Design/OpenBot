@@ -180,7 +180,12 @@ export function parseBotRefUrl(value: string): { botId: string } | null {
 /** Even a link that fails strict parsing must never reach the shell as an external link. */
 export function looksLikeThreadRefUrl(value: string): boolean {
   const lower = value.trim().toLowerCase();
-  return lower.startsWith(THREAD_URL_PREFIX) || lower.startsWith("openbot://thread/");
+  return (
+    lower.startsWith(THREAD_URL_PREFIX) ||
+    lower.startsWith("openbot://thread/") ||
+    lower.startsWith(BOT_URL_PREFIX) ||
+    lower.startsWith("openbot://bot/")
+  );
 }
 
 export function isThreadUuid(value: string): boolean {
