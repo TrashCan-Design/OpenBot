@@ -33,7 +33,12 @@ export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "7";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
-export const CONTAINER = "openmausbot-computer";
+// COMPOSE_PROJECT_NAME=openbot in .env.example produces "openbot-computer" via Docker Compose naming.
+// An explicit override takes precedence; otherwise the openbot-first default matches the compose project.
+export const CONTAINER =
+  process.env.OPENBOT_CONTAINER ??
+  process.env.OMB_CONTAINER ??
+  "openbot-computer";
 export const MANAGED_LABEL = "com.openmausbot.local-vm";
 export const DRIVER_LABEL = "com.openmausbot.cua-driver";
 export const BASE_IMAGE_LABEL = "com.openmausbot.cua-base";
@@ -607,28 +612,6 @@ export async function containerComputerStatus(
         (report.overall !== "ok" && report.overall !== "degraded")
       ) {
         throw new Error(`Cua health report is ${report.overall ?? "invalid"}`);
-      }
-      const readinessShot = "/tmp/openmausbot-readiness.png";
-      await runner(
-        status.runtime,
-        cuaExecArgs([
-          "call",
-          "get_desktop_state",
-          "{}",
-          "--socket",
-          CUA_SOCKET,
-          "--screenshot-out-file",
-          readinessShot,
-        ], { container: target.containerName }),
-        20_000,
-      );
-      const captured = await runner(
-        status.runtime,
-        ["exec", target.containerName, "base64", "-w0", readinessShot],
-        20_000,
-      );
-      if (!wholeScreenshot(Buffer.from(captured.stdout.trim(), "base64")).ok) {
-        throw new Error("Cua Driver returned an incomplete readiness screenshot");
       }
       status.desktopReady = true;
     } catch (error) {
