@@ -584,7 +584,16 @@ export async function containerComputerStatus(
     try {
       const expected = `cua-driver ${CUA_DRIVER_VERSION}`;
       const version = await runner(status.runtime, cuaExecArgs(["--version"], { container: target.containerName }), 8000);
-      if (version.stdout.trim() !== expected) throw new Error(`expected ${expected}`);
+      const trimmed = version.stdout.trim();
+      const match = /^cua-driver (\d+)\.(\d+)\.(\d+)/.exec(trimmed);
+      const versionOk =
+        trimmed === expected ||
+        (Boolean(match) && (
+          Number(match![1]) > 0 ||
+          (Number(match![1]) === 0 && Number(match![2]) > 37) ||
+          (Number(match![1]) === 0 && Number(match![2]) === 37 && Number(match![3]) >= 0)
+        ));
+      if (!versionOk) throw new Error(`expected ${expected}`);
       await runner(status.runtime, cuaExecArgs(["status", "--socket", CUA_SOCKET], { container: target.containerName }), 8000);
       const health = await runner(
         status.runtime,

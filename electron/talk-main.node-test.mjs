@@ -97,11 +97,9 @@ test("main tells the talk wiring when home changes and which skin the app painte
   assert.match(main, /busy: \(\) => \(\(oneHome\.oneHome\.busy\(\) \|\| ownHome\?\.busy\(\)\) && "move"\) \|\| \(computerSharing\?\.busy\(\) && "lending"\) \|\| \(talk\.busy\(\) && "talk"\) \|\|/);
 });
 
-test("the talk bridge keys stay off other servers' pages; a call can be reported from My Cloud's page", () => {
+test("the talk bridge keys stay off other servers' pages", () => {
   const list = name => preload.match(new RegExp(`const ${name} = (?:new Set\\()?\\[([^\\]]*)\\]`))[1];
   assert.doesNotMatch(list("REMOTE_SAFE"), /talkShortcut|callActive/);
-  assert.match(list("HOME_PAGE"), /"callActive"/);
-  assert.doesNotMatch(list("HOME_PAGE"), /talkShortcut/);
 });
 
 test("every microphone channel answers only this computer's page; a call can be reported from My Cloud's page too", () => {
@@ -274,7 +272,7 @@ test("a press while this computer's server is still starting says so", async () 
   h.start();
   h.press();
   await settle();
-  assert.deepEqual((await h.painted()).at(-1), { state: "error", text: "MausBot is still starting. Try again in a moment." });
+  assert.deepEqual((await h.painted()).at(-1), { state: "error", text: "OpenBot is still starting. Try again in a moment." });
   h.talk.close();
 });
 

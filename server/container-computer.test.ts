@@ -652,6 +652,25 @@ describe("containerComputerStatus", () => {
     expect(status.viewer_url).toContain("#autoconnect=true&resize=scale&password=secret123");
   });
 
+  it("accepts cua-driver 0.41.3 and newer semver releases during readiness probe", async () => {
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [versionProbe]: "cua-driver 0.41.3\n",
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "ok", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: validPng.toString("base64"),
+    });
+
+    const status = await containerComputerStatus(fake.run, "linux");
+    expect(status.desktopReady).toBe(true);
+    expect(status.ready).toBe(true);
+  });
+
   it("can inspect the viewer without waiting for CUA health or screenshots", async () => {
     const fake = runner({
       "/usr/bin/which docker": "docker\n",

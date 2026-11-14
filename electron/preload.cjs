@@ -24,7 +24,7 @@ ipcRenderer.on("chat:open", (_event, link) => {
 });
 
 // Only fixed actions are retained, never a destination supplied by a renderer.
-const FIXED_SETTINGS_ACTIONS = new Set(["organization"]);
+const FIXED_SETTINGS_ACTIONS = new Set(["organization", "cloud", "cloud-settings"]);
 let pendingSettingsAction = null;
 const appSettingsListeners = new Set();
 ipcRenderer.on("app:open-settings", (_event, section) => {
