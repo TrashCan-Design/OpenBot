@@ -30,27 +30,27 @@ private val keystoreProperties = Properties().apply {
     if (file.isFile) file.inputStream().use(::load)
 }
 
-private fun signingMaterial(property: String, environment: String): String? =
-    (System.getenv(environment) ?: keystoreProperties.getProperty(property))
-        ?.takeIf(String::isNotBlank)
+private fun signingMaterial(property: String, vararg environments: String): String? =
+    environments.firstNotNullOfOrNull { System.getenv(it)?.takeIf(String::isNotBlank) }
+        ?: keystoreProperties.getProperty(property)?.takeIf(String::isNotBlank)
 
-private val storeFilePath = signingMaterial("storeFile", "OPENMAUSBOT_KEYSTORE_FILE")
-private val storePasswordValue = signingMaterial("storePassword", "OPENMAUSBOT_KEYSTORE_PASSWORD")
-private val keyAliasValue = signingMaterial("keyAlias", "OPENMAUSBOT_KEY_ALIAS")
+private val storeFilePath = signingMaterial("storeFile", "OPENBOT_KEYSTORE_FILE", "OPENMAUSBOT_KEYSTORE_FILE")
+private val storePasswordValue = signingMaterial("storePassword", "OPENBOT_KEYSTORE_PASSWORD", "OPENMAUSBOT_KEYSTORE_PASSWORD")
+private val keyAliasValue = signingMaterial("keyAlias", "OPENBOT_KEY_ALIAS", "OPENMAUSBOT_KEY_ALIAS")
 // A PKCS12 keystore — keytool's default since JDK 9, and what `-storetype PKCS12`
 // produces — holds one password for the store and the key alike, so the key
 // password may be left out rather than repeated.
 private val keyPasswordValue =
-    signingMaterial("keyPassword", "OPENMAUSBOT_KEY_PASSWORD") ?: storePasswordValue
+    signingMaterial("keyPassword", "OPENBOT_KEY_PASSWORD", "OPENMAUSBOT_KEY_PASSWORD") ?: storePasswordValue
 
 // All three required values, or none of them. A build handed some of them is a
 // build somebody meant to sign, and answering that with an unsigned APK would
 // hand back something that looks finished and cannot be published. It stops here
 // instead, naming what is missing.
 private val releaseSigningMaterial = mapOf(
-    "storeFile / OPENMAUSBOT_KEYSTORE_FILE" to storeFilePath,
-    "storePassword / OPENMAUSBOT_KEYSTORE_PASSWORD" to storePasswordValue,
-    "keyAlias / OPENMAUSBOT_KEY_ALIAS" to keyAliasValue,
+    "storeFile / OPENBOT_KEYSTORE_FILE" to storeFilePath,
+    "storePassword / OPENBOT_KEYSTORE_PASSWORD" to storePasswordValue,
+    "keyAlias / OPENBOT_KEY_ALIAS" to keyAliasValue,
 )
 private val releaseKeystore: java.io.File? = when {
     releaseSigningMaterial.values.all { it == null } -> null
