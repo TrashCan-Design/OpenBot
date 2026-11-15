@@ -188,9 +188,12 @@ class ShareReceiveManifestTest {
 class PairingLinkTest {
     @Test
     fun `only the pairing scheme and host are an invite`() {
+        assertTrue(PairingLink.isInvite("openbot", "pair"))
+        assertTrue(PairingLink.isInvite("OpenBot", "PAIR"))
         assertTrue(PairingLink.isInvite("openmausbot", "pair"))
         assertTrue(PairingLink.isInvite("OpenMausBot", "PAIR"))
         assertFalse(PairingLink.isInvite("https", "pair"))
+        assertFalse(PairingLink.isInvite("openbot", "join"))
         assertFalse(PairingLink.isInvite("openmausbot", "join"))
         assertFalse(PairingLink.isInvite(null, null))
     }

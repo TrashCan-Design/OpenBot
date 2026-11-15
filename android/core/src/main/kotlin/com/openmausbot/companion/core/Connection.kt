@@ -397,9 +397,10 @@ data class PairingInvite(val connection: Connection, val credential: String) {
             if (url.scheme.equals("https", true) || url.scheme.equals("http", true)) {
                 return parseServerLink(url)
             }
-            if (!url.scheme.equals("openmausbot", ignoreCase = true) ||
-                !url.host.equals("pair", ignoreCase = true)
-            ) {
+            val isCustomScheme = (url.scheme.equals("openbot", ignoreCase = true) ||
+                url.scheme.equals("openmausbot", ignoreCase = true)) &&
+                url.host.equals("pair", ignoreCase = true)
+            if (!isCustomScheme) {
                 return null
             }
 
@@ -458,9 +459,13 @@ data class PairingInvite(val connection: Connection, val credential: String) {
          */
         fun isPairLink(url: String): Boolean {
             val text = url.trim()
-            val prefix = "openmausbot://pair"
-            if (!text.startsWith(prefix, ignoreCase = true)) return false
-            return text.length == prefix.length || text[prefix.length] in "?#/"
+            val prefixes = listOf("openbot://pair", "openmausbot://pair")
+            for (prefix in prefixes) {
+                if (text.startsWith(prefix, ignoreCase = true)) {
+                    if (text.length == prefix.length || text[prefix.length] in "?#/") return true
+                }
+            }
+            return false
         }
 
         /** The server's twelve-symbol code is distinct from companion codes and QR tokens. */

@@ -154,11 +154,30 @@ internal fun browseDiscoveryFlow(
     stopResolves: () -> Unit = {},
     hostAddress: (NsdServiceInfo) -> String?,
     failureMessage: (Int) -> String,
+): Flow<DiscoveryState> = browseDiscoveryFlow(
+    serviceTypes = listOf(serviceType),
+    acquireMulticastLock = acquireMulticastLock,
+    startBrowse = { _, listener -> startBrowse(listener) },
+    stopBrowse = stopBrowse,
+    resolveService = resolveService,
+    stopResolves = stopResolves,
+    hostAddress = hostAddress,
+    failureMessage = failureMessage,
+)
+
+internal fun browseDiscoveryFlow(
+    serviceTypes: List<String>,
+    acquireMulticastLock: () -> MulticastLockHandle?,
+    startBrowse: (String, NsdManager.DiscoveryListener) -> Unit,
+    stopBrowse: (NsdManager.DiscoveryListener) -> Unit,
+    resolveService: (NsdServiceInfo, (NsdServiceInfo?) -> Unit) -> Unit,
+    stopResolves: () -> Unit = {},
+    hostAddress: (NsdServiceInfo) -> String?,
+    failureMessage: (Int) -> String,
 ): Flow<DiscoveryState> = callbackFlow {
-    // Per-collection: acquire here, not at Flow construction.
     val multicastLock = acquireMulticastLock()
     val resolved = ConcurrentHashMap<String, DiscoveredService>()
-    var browsing = false
+    val activeTypes = ConcurrentHashMap.newKeySet<String>()
     var failure: String? = null
     var lockReleased = false
 
@@ -169,6 +188,7 @@ internal fun browseDiscoveryFlow(
     }
 
     fun emit() {
+        val browsing = activeTypes.isNotEmpty()
         val found = resolved.values.sortedBy { it.name.lowercase() }
         trySend(
             DiscoveryState.Active(
@@ -184,8 +204,6 @@ internal fun browseDiscoveryFlow(
 
     var attempts = 0
     var started = false
-    // Assigned below; the listener needs to reach the starter to retry, and the
-    // starter needs to build a listener.
     var startAttempt: (() -> Unit)? = null
 
     fun terminal(message: String) {
@@ -215,15 +233,18 @@ internal fun browseDiscoveryFlow(
         }
     }
 
-    fun newListener(): NsdManager.DiscoveryListener = object : NsdManager.DiscoveryListener {
+    fun newListener(type: String): NsdManager.DiscoveryListener = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(regType: String) {
-            browsing = true
+            activeTypes.add(type)
             failure = null
             emit()
         }
 
         override fun onServiceFound(service: NsdServiceInfo) {
-            if (service.serviceType != serviceType && !service.serviceType.contains("openmausbot")) {
+            val matches = serviceTypes.any { t ->
+                service.serviceType == t || service.serviceType.contains(t.trim('.'))
+            } || service.serviceType.contains("openbot") || service.serviceType.contains("openmausbot")
+            if (!matches) {
                 return
             }
             attemptResolve(service, attemptsSoFar = 1)
@@ -235,18 +256,19 @@ internal fun browseDiscoveryFlow(
         }
 
         override fun onDiscoveryStopped(regType: String) {
-            browsing = false
+            activeTypes.remove(type)
             emit()
         }
 
         override fun onStartDiscoveryFailed(regType: String, errorCode: Int) {
-            browsing = false
-            // This listener never registered, so nothing is left to stop.
+            activeTypes.remove(type)
             started = false
             if (!DiscoveryRetry.canRetry(attempts, errorCode)) {
-                // No active browse — drop the lock and close so the collector
-                // cannot hold a multicast wake for the screen lifetime.
-                terminal(failureMessage(errorCode))
+                if (activeTypes.isEmpty()) {
+                    terminal(failureMessage(errorCode))
+                } else {
+                    emit()
+                }
                 return
             }
             attempts += 1
@@ -254,27 +276,26 @@ internal fun browseDiscoveryFlow(
             emit()
             launch {
                 delay(DiscoveryRetry.delayFor(attempts))
-                // Leaving the screen during the backoff cancels this scope, so a
-                // retry never outlives the collector.
                 startAttempt?.invoke()
             }
         }
 
         override fun onStopDiscoveryFailed(regType: String, errorCode: Int) {
-            browsing = false
+            activeTypes.remove(type)
             failure = failureMessage(errorCode)
             emit()
         }
     }
 
-    var activeListener: NsdManager.DiscoveryListener? = null
+    val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
     startAttempt = {
-        // A fresh listener per attempt, as iOS builds a fresh browser: a listener
-        // the framework has already rejected must not be handed back to it.
-        val listener = newListener()
-        activeListener = listener
+        activeListeners.clear()
         try {
-            startBrowse(listener)
+            for (type in serviceTypes) {
+                val listener = newListener(type)
+                activeListeners.add(listener)
+                startBrowse(type, listener)
+            }
             started = true
         } catch (error: SecurityException) {
             started = false
@@ -294,7 +315,11 @@ internal fun browseDiscoveryFlow(
     startAttempt.invoke()
 
     awaitClose {
-        if (started) activeListener?.let { runCatching { stopBrowse(it) } }
+        if (started) {
+            for (listener in activeListeners) {
+                runCatching { stopBrowse(listener) }
+            }
+        }
         stopResolves()
         releaseLockOnce()
     }
@@ -415,8 +440,10 @@ interface CompanionDiscovery {
  */
 class NsdDiscovery(
     context: Context,
-    private val serviceType: String = SERVICE_TYPE,
+    private val serviceTypes: List<String> = SERVICE_TYPES,
 ) : CompanionDiscovery {
+    constructor(context: Context, serviceType: String) : this(context, listOf(serviceType))
+
     private val appContext = context.applicationContext
     private val nsdManager = appContext.getSystemService(NsdManager::class.java)
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -447,10 +474,10 @@ class NsdDiscovery(
         // nothing even when NEARBY_WIFI_DEVICES is granted. Acquire only when
         // the cold Flow is collected so close→reopen gets a fresh held lock.
         return browseDiscoveryFlow(
-            serviceType = serviceType,
+            serviceTypes = serviceTypes,
             acquireMulticastLock = ::acquireMulticastLock,
-            startBrowse = { listener ->
-                nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
+            startBrowse = { type, listener ->
+                nsdManager.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
             },
             stopBrowse = { listener ->
                 nsdManager.stopServiceDiscovery(listener)
@@ -529,7 +556,9 @@ class NsdDiscovery(
     }
 
     companion object {
-        const val SERVICE_TYPE = "_openmausbot._tcp."
+        const val SERVICE_TYPE = "_openbot._tcp."
+        const val LEGACY_SERVICE_TYPE = "_openmausbot._tcp."
+        val SERVICE_TYPES = listOf(SERVICE_TYPE, LEGACY_SERVICE_TYPE)
         const val MULTICAST_LOCK_TAG = "openmausbot-nsd"
     }
 }

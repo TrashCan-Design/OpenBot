@@ -8,10 +8,12 @@ package com.openmausbot.companion.ui
  */
 internal object PairingLink {
     const val SCHEME = "openmausbot"
+    const val OPENBOT_SCHEME = "openbot"
     const val HOST = "pair"
 
     fun isInvite(scheme: String?, host: String?): Boolean =
-        scheme.equals(SCHEME, ignoreCase = true) && host.equals(HOST, ignoreCase = true)
+        (scheme.equals(OPENBOT_SCHEME, ignoreCase = true) || scheme.equals(SCHEME, ignoreCase = true)) &&
+            host.equals(HOST, ignoreCase = true)
 }
 
 /**

@@ -223,6 +223,19 @@ class ConnectionTest {
         assertEquals(token, invite.credential)
     }
 
+    @Test
+    fun parsesAnOpenbotSchemePairingInvite() {
+        val token = "omb_pair_" + "a".repeat(43)
+        val invite = PairingInvite.parse(
+            URI("openbot://pair?address=macbook.tail1234.ts.net%3A8810&token=$token&code=004209&name=OpenBot%20Mac"),
+        )!!
+        assertEquals("macbook.tail1234.ts.net", invite.connection.host)
+        assertEquals(8810, invite.connection.port)
+        assertEquals("OpenBot Mac", invite.connection.name)
+        assertEquals(token, invite.credential)
+        assertTrue(PairingInvite.isPairLink("openbot://pair?address=macbook.local"))
+    }
+
     // Oct 3: an Android phone showed "Miguel's+computer". Desktops before Oct 2026 wrote
     // the link with URLSearchParams, which encodes a space as '+'; every builder writes a
     // real '+' as %2B, and no other field can contain one.

@@ -50,7 +50,7 @@ class ServerSessionPairingTest {
             )
             assertNull(f.store.saved)
             assertTrue(f.tokens.values.isEmpty())
-            assertEquals(1, f.requests.size)
+            assertEquals(2, f.requests.size)
         }
     }
 
@@ -166,7 +166,7 @@ class ServerSessionPairingTest {
             val client = CompanionClient(saved, "saved-bearer", f.http)
             assertFailsWith<APIError.Status> { client.fleet() }
             assertEquals(1, f.requests.size)
-            assertEquals("/.well-known/openmausbot/environment", f.requests.single().url.encodedPath)
+            assertEquals("/.well-known/openbot/environment", f.requests.single().url.encodedPath)
             assertNull(f.requests.single().header("Authorization"))
         }
     }
@@ -183,7 +183,7 @@ class ServerSessionPairingTest {
             assertEquals(active.id, f.session.connection.value?.id)
             assertEquals(1, f.requests.size)
             assertNull(f.requests.single().header("Authorization"))
-            assertEquals("/.well-known/openmausbot/environment", f.requests.single().url.encodedPath)
+            assertEquals("/.well-known/openbot/environment", f.requests.single().url.encodedPath)
         }
     }
 
@@ -192,9 +192,28 @@ class ServerSessionPairingTest {
         val saved = assertNotNull(Connection.parse("https://mini.example")).copy(serverEnvironmentId = "env-fixture")
         Fixture { request -> if (request.url.encodedPath == "/api/bots") 200 to "{\"bots\":[],\"groups\":[]}" else null }.use { f ->
             CompanionClient(saved, "saved-bearer", f.http).fleet()
-            assertEquals(listOf("/.well-known/openmausbot/environment", "/api/bots"), f.requests.map { it.url.encodedPath })
+            assertEquals(listOf("/.well-known/openbot/environment", "/api/bots"), f.requests.map { it.url.encodedPath })
             assertNull(f.requests.first().header("Authorization"))
             assertEquals("Bearer saved-bearer", f.requests.last().header("Authorization"))
+        }
+    }
+
+    @Test
+    fun legacyServerFallingBackFromOpenbotToOpenmausbotDescriptorSucceeds() = runBlocking<Unit> {
+        val saved = assertNotNull(Connection.parse("https://mini.example")).copy(serverEnvironmentId = "env-fixture")
+        Fixture { request ->
+            when (request.url.encodedPath) {
+                "/.well-known/openbot/environment" -> 404 to "{}"
+                "/.well-known/openmausbot/environment" -> 200 to """{"environmentId":"env-fixture","label":"legacy mini"}"""
+                "/api/bots" -> 200 to "{\"bots\":[],\"groups\":[]}"
+                else -> null
+            }
+        }.use { f ->
+            CompanionClient(saved, "saved-bearer", f.http).fleet()
+            assertEquals(
+                listOf("/.well-known/openbot/environment", "/.well-known/openmausbot/environment", "/api/bots"),
+                f.requests.map { it.url.encodedPath },
+            )
         }
     }
 

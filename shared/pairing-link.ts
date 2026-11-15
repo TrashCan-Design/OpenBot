@@ -10,11 +10,31 @@ export interface CompanionEndpoint {
   priority: number;
 }
 
+export const PAIRING_SCHEMES = ["openbot", "openmausbot"] as const;
+export type PairingScheme = (typeof PAIRING_SCHEMES)[number];
+
+export function isPairingScheme(scheme: string): boolean {
+  const normalized = scheme.toLowerCase().replace(/:$/, "");
+  return normalized === "openbot" || normalized === "openmausbot";
+}
+
+export function isPairingLink(url: string): boolean {
+  const text = url.trim();
+  for (const scheme of PAIRING_SCHEMES) {
+    const prefix = `${scheme}://pair`;
+    if (text.toLowerCase().startsWith(prefix)) {
+      if (text.length === prefix.length || "?#/".includes(text[prefix.length])) return true;
+    }
+  }
+  return false;
+}
+
 export interface PhonePairingLinkOptions {
   /** Where the phone dials first: a host or IP literal together with `port`
    * (the desktop companion), or a complete http(s) origin (a server). */
   address: string;
   port?: number;
+  scheme?: PairingScheme;
   /** The high-entropy one-time credential the scanner redeems. */
   token: string;
   /** The six digits the desktop shows; servers have none. */
@@ -145,6 +165,7 @@ export function phonePairingLink({
   hosts,
   endpoints,
   secretPublicKey,
+  scheme = "openbot",
 }: PhonePairingLinkOptions): string | null {
   const dial = linkAddress(address, port);
   if (!dial || !/^omb_pair_[A-Za-z0-9_-]{43}$/.test(token)) return null;
@@ -165,5 +186,5 @@ export function phonePairingLink({
   const secretKey = validSecretPublicKey(secretPublicKey);
   if (secretKey) fields.push(["secretKey", secretKey]);
 
-  return `openmausbot://pair?${fields.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&")}`;
+  return `${scheme}://pair?${fields.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&")}`;
 }

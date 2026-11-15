@@ -168,7 +168,7 @@ jobs:
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew :core:test :app:testDebugUnitTest || true
+          ./gradlew :core:test :app:testDebugUnitTest
       - name: Assemble APKs
         run: |
           cd android

@@ -290,10 +290,24 @@ class CompanionClient(
     suspend fun environment(): ServerEnvironment {
         connection.requireServerTransport()
         val publicClient = CompanionClient(connection, null, actionClient)
-        return publicClient.send(
-            publicClient.makeRequest("GET", "/.well-known/openmausbot/environment"),
-            publicClient.actionClient.newBuilder().followRedirects(false).followSslRedirects(false).build(),
-        )
+        val requestClient = publicClient.actionClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        return try {
+            publicClient.send(
+                publicClient.makeRequest("GET", "/.well-known/openbot/environment"),
+                requestClient,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: APIError.Status) {
+            if (error.code == 404) {
+                publicClient.send(
+                    publicClient.makeRequest("GET", "/.well-known/openmausbot/environment"),
+                    requestClient,
+                )
+            } else {
+                throw error
+            }
+        }
     }
 
     suspend fun health(): JsonObject = send(makeRequest("GET", "/api/health"))
@@ -1405,7 +1419,7 @@ class CompanionClient(
                     companion.makeRequest("GET", "/api/health"),
                     probeClient,
                 )
-                if (identity.app == "openmausbot") {
+                if (identity.app == "openbot" || identity.app == "openmausbot") {
                     null
                 } else {
                     APIError.Transport("Something other than OpenMausBot answers at ${connection.displayAddress}.")

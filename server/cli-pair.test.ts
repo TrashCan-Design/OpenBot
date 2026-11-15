@@ -190,7 +190,7 @@ describe("the phone-app link `openmausbot pair` prints", () => {
     });
     expect(await runPair({ ...options, label: "Pixel", publicUrl: explicitOrigin })).toBe(0);
     expect(printed()).toContain(
-      `phone app:     openmausbot://pair?address=${encodeURIComponent(explicitOrigin)}&token=${credential}&name=Miguel's%20computer\n`,
+      `phone app:     openbot://pair?address=${encodeURIComponent(explicitOrigin)}&token=${credential}&name=Miguel's%20computer\n`,
     );
     expect(printed()).not.toContain(encodeURIComponent(advertisedOrigin));
   });
