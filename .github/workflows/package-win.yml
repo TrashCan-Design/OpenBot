@@ -180,12 +180,10 @@ jobs:
           mkdir -p release-android
           PREVIEW_APK=$(find android/app/build/outputs/apk/preview -name "*.apk" | head -n 1)
           RELEASE_APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -n "$PREVIEW_APK" ] && [ -f "$PREVIEW_APK" ]; then
-            cp "$PREVIEW_APK" "release-android/OpenBot-${VERSION}-preview.apk"
-          fi
-          if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
-            cp "$RELEASE_APK" "release-android/OpenBot-${VERSION}-$(basename "$RELEASE_APK")"
-          fi
+          [ -n "$PREVIEW_APK" ] && [ -f "$PREVIEW_APK" ] || { echo "::error::Preview APK not found in android/app/build/outputs/apk/preview"; exit 1; }
+          [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ] || { echo "::error::Release APK not found in android/app/build/outputs/apk/release"; exit 1; }
+          cp "$PREVIEW_APK" "release-android/OpenBot-${VERSION}-preview.apk"
+          cp "$RELEASE_APK" "release-android/OpenBot-${VERSION}-$(basename "$RELEASE_APK")"
           cd release-android
           sha256sum *.apk > SHA256SUMS-android.txt
           echo "${{ github.sha }}" > SOURCE_COMMIT.txt

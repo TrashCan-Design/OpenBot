@@ -30,7 +30,7 @@ describe("OpenBot Windows build and updater release", () => {
       { name: "android-apk", path: "release-android" },
     ]);
     expect(publish.steps.some((s: { run?: string }) => s.run === "node scripts/windows-release.mjs publish release")).toBe(true);
-    expect(publish.steps.at(-1).run).toContain('gh release upload "v$VERSION" release-android/*.apk release-android/SHA256SUMS-android.txt');
+    expect(publish.steps.at(-1).run).toContain('gh release upload "v$VERSION" release-android/*.apk release-android/SHA256SUMS-android.txt --repo "${{ github.repository }}" --clobber');
     const main = parse(readFileSync(new URL("../.github/workflows/openbot-windows-release.yml", import.meta.url), "utf8"));
     expect(main.concurrency).toEqual(workflow.concurrency);
     expect(main.jobs.package.if).toContain("refs/heads/main");
@@ -55,7 +55,13 @@ describe("OpenBot Windows build and updater release", () => {
   });
   it("builds and uploads Android APK artifacts", () => {
     expect(workflow.jobs.android["runs-on"]).toBe("ubuntu-latest");
+    expect(workflow.jobs.android.steps[0].with).toEqual({ ref: "${{ inputs.ref || github.sha }}", "persist-credentials": false });
+    const javaStep = workflow.jobs.android.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/setup-java@"));
+    expect(javaStep?.with).toEqual({ distribution: "temurin", "java-version": "17" });
+    expect(workflow.jobs.android.steps.some((step: { run?: string }) => step.run?.includes(":app:assemblePreview"))).toBe(true);
     expect(workflow.jobs.android.steps.some((step: { run?: string }) => step.run?.includes(":app:assembleRelease"))).toBe(true);
+    const prepareStep = workflow.jobs.android.steps.find((step: { name?: string }) => step.name === "Prepare Android release artifacts");
+    expect(prepareStep?.run).toContain("sha256sum *.apk > SHA256SUMS-android.txt");
     const artifact = workflow.jobs.android.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(artifact.with.name).toBe("android-apk");
     for (const path of ["release-android/*.apk", "release-android/SHA256SUMS-android.txt", "release-android/SOURCE_COMMIT.txt"]) {
