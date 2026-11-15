@@ -10,18 +10,27 @@ describe("OpenBot Windows build and updater release", () => {
     expect(workflow.jobs.package["runs-on"]).toBe("windows-latest");
     expect(workflow.jobs.package.env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
     expect(workflow.jobs.package.steps.some((step: { run?: string }) => step.run === "pnpm package:win")).toBe(true);
-    expect(JSON.stringify(workflow)).not.toContain("gh release");
+    expect(JSON.stringify(workflow.jobs.package)).not.toContain("gh release");
+    expect(JSON.stringify(workflow.jobs.android)).not.toContain("gh release");
     expect(workflow.jobs.package.steps[0].with).toEqual({ ref: "${{ inputs.ref || github.sha }}", "persist-credentials": false });
   });
   it("publishes only a successful installer-branch push and serializes stable releases", () => {
     expect(workflow.concurrency).toEqual({ group: "openbot-windows-release", "cancel-in-progress": false });
+    expect(workflow.jobs.android["runs-on"]).toBe("ubuntu-latest");
     const publish = workflow.jobs.publish;
-    expect(publish.needs).toBe("package");
+    expect(publish.needs).toEqual(["package", "android"]);
     expect(publish.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-installer' && github.repository == 'TrashCan-Design/OpenBot'");
     expect(publish.permissions).toEqual({ contents: "write" });
     expect(publish.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
-    expect(publish.steps.find((s: { uses?: string }) => s.uses?.startsWith("actions/download-artifact@"))?.with).toEqual({ name: "windows-installer", path: "release" });
-    expect(publish.steps.at(-1).run).toBe("node scripts/windows-release.mjs publish release");
+    const downloads = publish.steps
+      .filter((s: { uses?: string }) => s.uses?.startsWith("actions/download-artifact@"))
+      .map((s: { with: unknown }) => s.with);
+    expect(downloads).toEqual([
+      { name: "windows-installer", path: "release" },
+      { name: "android-apk", path: "release-android" },
+    ]);
+    expect(publish.steps.some((s: { run?: string }) => s.run === "node scripts/windows-release.mjs publish release")).toBe(true);
+    expect(publish.steps.at(-1).run).toContain('gh release upload "v$VERSION" release-android/*.apk release-android/SHA256SUMS-android.txt');
     const main = parse(readFileSync(new URL("../.github/workflows/openbot-windows-release.yml", import.meta.url), "utf8"));
     expect(main.concurrency).toEqual(workflow.concurrency);
     expect(main.jobs.package.if).toContain("refs/heads/main");
@@ -43,5 +52,14 @@ describe("OpenBot Windows build and updater release", () => {
     for (const path of ["release/*.exe", "release/*.exe.blockmap", "release/latest.yml", "release/SHA256SUMS.txt", "release/SOURCE_COMMIT.txt"]) expect(artifact.with.path).toContain(path);
     const record = workflow.jobs.package.steps.find((step: { name?: string }) => step.name === "Record installer checksums and source");
     expect(record.run).toContain("cd release\nsha256sum *.exe");
+  });
+  it("builds and uploads Android APK artifacts", () => {
+    expect(workflow.jobs.android["runs-on"]).toBe("ubuntu-latest");
+    expect(workflow.jobs.android.steps.some((step: { run?: string }) => step.run?.includes(":app:assembleRelease"))).toBe(true);
+    const artifact = workflow.jobs.android.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/upload-artifact@"));
+    expect(artifact.with.name).toBe("android-apk");
+    for (const path of ["release-android/*.apk", "release-android/SHA256SUMS-android.txt", "release-android/SOURCE_COMMIT.txt"]) {
+      expect(artifact.with.path).toContain(path);
+    }
   });
 });
