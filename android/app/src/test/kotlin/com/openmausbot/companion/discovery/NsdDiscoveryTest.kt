@@ -417,6 +417,80 @@ class NsdDiscoveryTest {
         assertFalse(locks[1].isHeld)
         assertEquals(1, locks[1].releaseCount)
     }
+
+    @Test
+    fun dualServiceDiscoveryStartsBrowsingBothAndCleansUpBothOnCancel() = runTest {
+        val lock = FakeMulticastLock(held = true)
+        val startedTypes = mutableListOf<String>()
+        val listeners = mutableListOf<NsdManager.DiscoveryListener>()
+        val stopped = mutableListOf<NsdManager.DiscoveryListener>()
+
+        val collectJob = launch {
+            browseDiscoveryFlow(
+                serviceTypes = listOf(NsdDiscovery.SERVICE_TYPE, NsdDiscovery.LEGACY_SERVICE_TYPE),
+                acquireMulticastLock = { lock },
+                startBrowse = { type, listener ->
+                    startedTypes += type
+                    listeners += listener
+                },
+                stopBrowse = { stopped += it },
+                resolveService = { _, _ -> },
+                hostAddress = { null },
+                failureMessage = { "unused" },
+            ).collect { }
+        }
+        runCurrent()
+
+        assertEquals(2, startedTypes.size)
+        assertEquals(listOf(NsdDiscovery.SERVICE_TYPE, NsdDiscovery.LEGACY_SERVICE_TYPE), startedTypes)
+        assertEquals(2, listeners.size)
+
+        collectJob.cancel()
+        advanceUntilIdle()
+
+        assertEquals(2, stopped.size)
+        assertTrue(stopped.containsAll(listeners))
+        assertFalse(lock.isHeld)
+    }
+
+    @Test
+    fun oneServiceTypeFailingDoesNotInterruptActiveBrowsingOfAnother() = runTest {
+        val lock = FakeMulticastLock(held = true)
+        val listeners = mutableMapOf<String, NsdManager.DiscoveryListener>()
+        val states = mutableListOf<DiscoveryState>()
+
+        val collectJob = launch {
+            browseDiscoveryFlow(
+                serviceTypes = listOf(NsdDiscovery.SERVICE_TYPE, NsdDiscovery.LEGACY_SERVICE_TYPE),
+                acquireMulticastLock = { lock },
+                startBrowse = { type, listener -> listeners[type] = listener },
+                stopBrowse = { },
+                resolveService = { _, _ -> },
+                hostAddress = { null },
+                failureMessage = { "failed:$it" },
+            ).collect { states += it }
+        }
+        runCurrent()
+
+        listeners[NsdDiscovery.SERVICE_TYPE]!!.onDiscoveryStarted(NsdDiscovery.SERVICE_TYPE)
+        runCurrent()
+        assertTrue(assertIs<DiscoveryState.Active>(states.last()).browsing)
+        assertNull(assertIs<DiscoveryState.Active>(states.last()).failure)
+
+        listeners[NsdDiscovery.LEGACY_SERVICE_TYPE]!!.onStartDiscoveryFailed(
+            NsdDiscovery.LEGACY_SERVICE_TYPE,
+            NsdManager.FAILURE_MAX_LIMIT,
+        )
+        runCurrent()
+
+        val stateAfterFailure = assertIs<DiscoveryState.Active>(states.last())
+        assertTrue(stateAfterFailure.browsing, "browsing must stay active through the primary service type")
+        assertNull(stateAfterFailure.failure, "failure must not be reported when an alternate service type is active")
+        assertFalse(collectJob.isCompleted)
+
+        collectJob.cancel()
+        advanceUntilIdle()
+    }
 }
 
 class DiscoveryRetryTest {

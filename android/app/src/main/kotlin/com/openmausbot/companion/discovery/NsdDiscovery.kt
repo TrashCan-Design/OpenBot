@@ -177,7 +177,10 @@ internal fun browseDiscoveryFlow(
 ): Flow<DiscoveryState> = callbackFlow {
     val multicastLock = acquireMulticastLock()
     val resolved = ConcurrentHashMap<String, DiscoveredService>()
+    val serviceSourceTypes = ConcurrentHashMap<String, MutableSet<String>>()
     val activeTypes = ConcurrentHashMap.newKeySet<String>()
+    val activeListeners = ConcurrentHashMap<String, NsdManager.DiscoveryListener>()
+    val attempts = ConcurrentHashMap<String, Int>()
     var failure: String? = null
     var lockReleased = false
 
@@ -202,13 +205,14 @@ internal fun browseDiscoveryFlow(
 
     trySend(DiscoveryState.Active(browsing = false, found = emptyList()))
 
-    var attempts = 0
-    var started = false
-    var startAttempt: (() -> Unit)? = null
-
     fun terminal(message: String) {
         failure = message
         emit()
+        for ((_, listener) in activeListeners) {
+            runCatching { stopBrowse(listener) }
+        }
+        activeListeners.clear()
+        stopResolves()
         releaseLockOnce()
         close()
     }
@@ -223,6 +227,10 @@ internal fun browseDiscoveryFlow(
                     }
                 }
                 return@resolveService
+            }
+            val serviceType = info.serviceType ?: ""
+            serviceSourceTypes.compute(info.serviceName) { _, types ->
+                (types ?: ConcurrentHashMap.newKeySet()).apply { add(serviceType) }
             }
             resolved[info.serviceName] = DiscoveredService(
                 name = info.serviceName,
@@ -251,75 +259,87 @@ internal fun browseDiscoveryFlow(
         }
 
         override fun onServiceLost(service: NsdServiceInfo) {
-            resolved.remove(service.serviceName)
-            emit()
+            val types = serviceSourceTypes[service.serviceName]
+            types?.remove(service.serviceType)
+            if (types.isNullOrEmpty()) {
+                serviceSourceTypes.remove(service.serviceName)
+                resolved.remove(service.serviceName)
+                emit()
+            }
         }
 
         override fun onDiscoveryStopped(regType: String) {
+            activeListeners.remove(type)
             activeTypes.remove(type)
             emit()
         }
 
         override fun onStartDiscoveryFailed(regType: String, errorCode: Int) {
+            activeListeners.remove(type)
             activeTypes.remove(type)
-            started = false
-            if (!DiscoveryRetry.canRetry(attempts, errorCode)) {
-                if (activeTypes.isEmpty()) {
+            val currentAttempts = attempts[type] ?: 0
+            if (!DiscoveryRetry.canRetry(currentAttempts, errorCode)) {
+                if (activeTypes.isEmpty() && activeListeners.isEmpty()) {
                     terminal(failureMessage(errorCode))
                 } else {
                     emit()
                 }
                 return
             }
-            attempts += 1
-            failure = DiscoveryRetry.RETRYING
+            val nextAttempt = currentAttempts + 1
+            attempts[type] = nextAttempt
+            if (activeTypes.isEmpty()) {
+                failure = DiscoveryRetry.RETRYING
+            }
             emit()
             launch {
-                delay(DiscoveryRetry.delayFor(attempts))
-                startAttempt?.invoke()
+                delay(DiscoveryRetry.delayFor(nextAttempt))
+                startType(type)
             }
         }
 
         override fun onStopDiscoveryFailed(regType: String, errorCode: Int) {
+            activeListeners.remove(type)
             activeTypes.remove(type)
-            failure = failureMessage(errorCode)
+            if (activeTypes.isEmpty()) {
+                failure = failureMessage(errorCode)
+            }
             emit()
         }
     }
 
-    val activeListeners = mutableListOf<NsdManager.DiscoveryListener>()
-    startAttempt = {
-        activeListeners.clear()
+    fun startType(type: String) {
+        val listener = newListener(type)
+        activeListeners[type] = listener
         try {
-            for (type in serviceTypes) {
-                val listener = newListener(type)
-                activeListeners.add(listener)
-                startBrowse(type, listener)
-            }
-            started = true
+            startBrowse(type, listener)
         } catch (error: SecurityException) {
-            started = false
+            activeListeners.remove(type)
             terminal(
                 "Local Network access is off. Enable nearby devices permission, " +
                     "or enter a Tailscale address below.",
             )
         } catch (error: Exception) {
-            started = false
-            terminal(
-                error.message
-                    ?: "Local discovery isn't available right now. " +
-                    "Enter the address shown in Phone settings below.",
-            )
-        }
-    }
-    startAttempt.invoke()
-
-    awaitClose {
-        if (started) {
-            for (listener in activeListeners) {
-                runCatching { stopBrowse(listener) }
+            activeListeners.remove(type)
+            if (activeListeners.isEmpty() && activeTypes.isEmpty()) {
+                terminal(
+                    error.message
+                        ?: "Local discovery isn't available right now. " +
+                        "Enter the address shown in Phone settings below.",
+                )
             }
         }
+    }
+
+    for (type in serviceTypes) {
+        startType(type)
+    }
+
+    awaitClose {
+        for ((_, listener) in activeListeners) {
+            runCatching { stopBrowse(listener) }
+        }
+        activeListeners.clear()
         stopResolves()
         releaseLockOnce()
     }

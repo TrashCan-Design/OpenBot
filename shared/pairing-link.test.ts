@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phonePairingLink } from "./pairing-link";
+import { isPairingLink, isPairingScheme, phonePairingLink } from "./pairing-link";
 
 describe("phonePairingLink", () => {
   const token = `omb_pair_${"a".repeat(43)}`;
@@ -178,5 +178,23 @@ describe("phonePairingLink", () => {
     expect(phonePairingLink({ address: "https://mini.example/omb", token })).toBeNull();
     expect(phonePairingLink({ address: "https://mini.example/?x=1", token })).toBeNull();
     expect(phonePairingLink({ address: "https://mini.example/#pair", token })).toBeNull();
+  });
+
+  it("recognizes openbot and openmausbot pairing schemes and link formats", () => {
+    expect(isPairingScheme("openbot")).toBe(true);
+    expect(isPairingScheme("openmausbot")).toBe(true);
+    expect(isPairingScheme("OpenBot:")).toBe(true);
+    expect(isPairingScheme("openmausbot:")).toBe(true);
+    expect(isPairingScheme("https")).toBe(false);
+    expect(isPairingScheme("")).toBe(false);
+
+    expect(isPairingLink(`openbot://pair?token=${token}`)).toBe(true);
+    expect(isPairingLink(`openmausbot://pair?token=${token}`)).toBe(true);
+    expect(isPairingLink("OPENBOT://PAIR#code=123456")).toBe(true);
+    expect(isPairingLink("openbot://pair/invite")).toBe(true);
+    expect(isPairingLink("openbot://pair")).toBe(true);
+    expect(isPairingLink("openbot://pairing")).toBe(false);
+    expect(isPairingLink("https://mini.example/pair")).toBe(false);
+    expect(isPairingLink("")).toBe(false);
   });
 });
