@@ -10,10 +10,11 @@ const event = (start: number, end: number, extra: Partial<CalendarEvent> = {}): 
 });
 
 describe("busy times", () => {
-  it("keeps only start and end, merges what touches, and leaves out declined, cancelled and day-long events", () => {
+  it("keeps only start and end, merges what touches, and leaves out declined, cancelled, transparent and day-long events", () => {
     const busy = busyTimes([
       event(10 * H, 11 * H), event(10.5 * H, 12 * H), event(12 * H, 13 * H), event(15 * H, 16 * H, { selfDeclined: true }),
       event(17 * H, 18 * H, { status: "cancelled" }), event(0, 24 * H, { allDay: true }), event(20 * H, 21 * H, { status: "tentative" }),
+      event(22 * H, 23 * H, { transparency: "transparent" }),
     ]);
     expect(busy).toEqual([{ start: 10 * H, end: 13 * H }, { start: 20 * H, end: 21 * H }]);
     expect(JSON.stringify(busy)).not.toMatch(/Salary|HR|Room|Confidential/);

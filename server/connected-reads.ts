@@ -24,7 +24,10 @@ export interface CalendarEvent {
   iCalUID?: string;
   originalStart?: number;
   organizer?: string;
+  transparency?: "opaque" | "transparent";
 }
+
+export type BusyTime = { start: number; end: number };
 
 export interface EmailHeader {
   id: string;
@@ -63,6 +66,7 @@ export const GMAIL_PROFILE_TOOL = "GMAIL_GET_PROFILE";
 export const GMAIL_MESSAGE_TOOL = "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID";
 export const GMAIL_THREAD_TOOL = "GMAIL_FETCH_MESSAGE_BY_THREAD_ID";
 const CALENDAR_READS_AT_ONCE = 4;
+const CALENDAR_PAGES = 10;
 const CALENDAR_NAME_MAX = 80;
 const GOOGLE_NOT_FOUND = /\brequested entity was not found\b/i;
 const MESSAGE_WORD = /\b(?:message|email|thread)\b/i;
@@ -213,6 +217,7 @@ function calendarEvent(raw: unknown, calendar: { id: string; owned: boolean }): 
     ...(typeof item.iCalUID === "string" && item.iCalUID ? { iCalUID: item.iCalUID } : {}),
     ...(Number.isFinite(originalStart) ? { originalStart } : {}),
     ...(typeof organizer === "string" && organizer.trim() ? { organizer: organizer.trim().toLowerCase() } : {}),
+    ...(item.transparency === "opaque" || item.transparency === "transparent" ? { transparency: item.transparency } : {}),
   };
 }
 
@@ -227,6 +232,19 @@ export function eventsFromData(data: unknown, calendar: { id: string; owned: boo
   });
   if (list.length > cancelledDropped && events.length === 0) throw new Error("none of the calendar events could be read");
   return events;
+}
+
+/** Busy times, merged where they touch: every event the person did not decline, that is not cancelled, and is not transparent. */
+export function busyTimes(events: readonly CalendarEvent[]): BusyTime[] {
+  const slots = events.filter((event) => !event.allDay && event.status !== "cancelled" && !event.selfDeclined && event.end > event.start && event.transparency !== "transparent")
+    .map((event) => ({ start: event.start, end: event.end })).sort((a, b) => a.start - b.start);
+  const merged: BusyTime[] = [];
+  for (const slot of slots) {
+    const last = merged.at(-1);
+    if (last && slot.start <= last.end) last.end = Math.max(last.end, slot.end);
+    else merged.push({ ...slot });
+  }
+  return merged;
 }
 
 function messageId(item: Record<string, unknown> | undefined): string | undefined {
@@ -407,11 +425,19 @@ export function createConnectedReads(deps: ConnectedReadDeps): ConnectedReads {
         const read = [...(listed.some((calendar) => calendar.primary) ? [] : [PRIMARY_CALENDAR]), ...listed.filter((calendar) => calendar.read)];
         const perCalendar = await inParallel(read, CALENDAR_READS_AT_ONCE, async (calendar) => {
           try {
-            const data = await call(CALENDAR_LIST_TOOL, {
-              calendarId: calendar.id, timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
-              singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
-            }, { signal });
-            return eventsFromData(data, { id: calendar.id, owned: calendar.owned });
+            const events: CalendarEvent[] = [];
+            let pageToken: string | undefined;
+            for (let page = 0; page < CALENDAR_PAGES; page++) {
+              const data = await call(CALENDAR_LIST_TOOL, {
+                calendarId: calendar.id, timeMin: new Date(fromMs).toISOString(), timeMax: new Date(toMs).toISOString(),
+                singleEvents: true, orderBy: "startTime", maxResults: 100, showDeleted: true,
+                ...(pageToken ? { pageToken } : {}),
+              }, { signal });
+              events.push(...eventsFromData(data, { id: calendar.id, owned: calendar.owned }));
+              pageToken = nextPageOf(data);
+              if (!pageToken) break;
+            }
+            return events;
           } catch (error) {
             failed.abort();
             throw new SourceError("googlecalendar", `calendar ${calendar.name}: ${errorText(error)}`);

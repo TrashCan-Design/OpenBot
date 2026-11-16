@@ -21,6 +21,8 @@ describe("whether two requests to one bot ask the same thing", () => {
       "Please draft the reply to the customer about the refund and send it to me first."],
     ["a word more", ASK, "How many days would the database migration to the new hosting provider not take, roughly?"],
     ["a number", ASK, "How many days would the database migration to the 2 new hosting providers take, roughly?"],
+    ["a symbol or currency", "Would the migration to the new cloud provider cost $1000 or more in total?", "Would the migration to the new cloud provider cost €1000 or more in total?"],
+    ["a percentage symbol", "Did our quarterly conversion rate increase by 15% after the new homepage redesign?", "Did our quarterly conversion rate increase by 15 after the new homepage redesign?"],
     ["digits run together", `${ASK} 5-6`, `${ASK} 56`],
   ])("keeps two requests apart that differ by %s, however alike they read", (_name, asked, other) => {
     expect(sameRequest(asked, other)).toBe(false);

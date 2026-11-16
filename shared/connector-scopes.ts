@@ -33,8 +33,8 @@ export function isReadOnlyAction(slug: string, toolkit?: string): boolean {
   if (KNOWN_READ_SLUGS.has(slug)) return true;
   const cut = toolkit ? toolkit.length : slug.indexOf("_");
   const action = cut > 0 ? slug.slice(cut + 1) : "";
-  const first = action.toUpperCase().split(/[^A-Z0-9]+/).find(Boolean);
-  return first !== undefined && READ_VERBS.has(first);
+  const tokens = action.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  return (tokens[0] !== undefined && READ_VERBS.has(tokens[0])) || (tokens[1] !== undefined && READ_VERBS.has(tokens[1]));
 }
 
 /** The stored shape, or null when the value is not one. */

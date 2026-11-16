@@ -22,6 +22,9 @@ describe("isReadOnlyAction", () => {
     expect(isReadOnlyAction("GMAIL_FETCH_EMAILS")).toBe(true);
     expect(isReadOnlyAction("SLACK_SEARCH_MESSAGES")).toBe(true);
     expect(isReadOnlyAction("GITHUB_GET_A_PULL_REQUEST")).toBe(true);
+    expect(isReadOnlyAction("HIGHLEVEL_CONTACTS_GET", "highlevel")).toBe(true);
+    expect(isReadOnlyAction("HIGHLEVEL_CONTACTS_SEARCH", "highlevel")).toBe(true);
+    expect(isReadOnlyAction("HIGHLEVEL_CONTACTS_CREATE", "highlevel")).toBe(false);
     expect(isReadOnlyAction("GMAIL_SEND_EMAIL")).toBe(false);
     expect(isReadOnlyAction("GOOGLESHEETS_BATCH_UPDATE")).toBe(false);
     expect(isReadOnlyAction("GMAIL_CREATE_EMAIL_DRAFT")).toBe(false);

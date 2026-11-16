@@ -771,7 +771,12 @@ describe("cron routines use the existing persistent scheduler", () => {
     const h = harness(start);
     const routine = h.manager.create(input());
     const before = readFileSync(h.options.file!, "utf8");
-    for (const schedule of [{ ...monthly, expression: "0 9 31 2 *" }, { ...monthly, timeZone: "Mars/Olympus" }, { ...monthly, expression: "0 0 9 * * *" }]) {
+    for (const schedule of [
+      { ...monthly, expression: "0 9 31 2 *" },
+      { ...monthly, timeZone: "Mars/Olympus" },
+      { ...monthly, expression: "0 0 9 * * *" },
+      { type: "once" as const, at: 9_000_000_000_000_000 },
+    ]) {
       expect(() => h.manager.create(input(schedule))).toThrow(RoutineScheduleError);
       try { h.manager.update(routine.id, { schedule }); throw new Error("expected rejection"); }
       catch (error) { expect(error).toMatchObject({ status: 400 }); }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  calendarsFromData, createConnectedReads, emailsFromData, eventsFromData, messageFromData, profileFromData, SourceError, threadFromData, toolData,
+  busyTimes, calendarsFromData, createConnectedReads, emailsFromData, eventsFromData, messageFromData, profileFromData, SourceError, threadFromData, toolData,
 } from "./connected-reads.ts";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./testing/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -100,5 +100,40 @@ describe("a check's reads", () => {
     expect(mail).toMatchObject({ app: "gmail", signedOut: true });
     const calendar = await session.events(0, 1).catch((error: unknown) => error);
     expect(calendar).toMatchObject({ app: "googlecalendar", signedOut: false });
+  });
+
+  it("pages through calendar events using pageToken", async () => {
+    const pages: Record<string, unknown> = {
+      first: {
+        items: [{ id: "e1", summary: "Event 1", start: { dateTime: "2026-10-22T08:00:00Z" }, end: { dateTime: "2026-10-22T09:00:00Z" } }],
+        nextPageToken: "cal-page-2",
+      },
+      "cal-page-2": {
+        items: [{ id: "e2", summary: "Event 2", start: { dateTime: "2026-10-22T10:00:00Z" }, end: { dateTime: "2026-10-22T11:00:00Z" } }],
+      },
+    };
+    const { deps, frames } = relay({
+      GOOGLECALENDAR_LIST_CALENDARS: () => ({ successful: true, data: { items: [{ id: "primary", primary: true, accessRole: "owner" }] } }),
+      GOOGLECALENDAR_EVENTS_LIST: (args) => ({ successful: true, data: pages[String(args.pageToken ?? "first")] }),
+    });
+    const session = createConnectedReads(deps).session();
+    const events = await session.events(Date.parse("2026-10-22T00:00:00Z"), Date.parse("2026-10-23T00:00:00Z"));
+    expect(events.map((e) => e.id)).toEqual(["e1", "e2"]);
+    const listCalls = frames.filter((f) => f.slug === "GOOGLECALENDAR_EVENTS_LIST");
+    expect(listCalls).toHaveLength(2);
+    expect(listCalls[0]!.args!.pageToken).toBeUndefined();
+    expect(listCalls[1]!.args!.pageToken).toBe("cal-page-2");
+  });
+
+  it("parses event transparency and skips transparent events in busyTimes", () => {
+    const events = eventsFromData({
+      items: [
+        { id: "e1", summary: "Busy", start: { dateTime: "2026-10-22T08:00:00Z" }, end: { dateTime: "2026-10-22T09:00:00Z" }, transparency: "opaque" },
+        { id: "e2", summary: "Free", start: { dateTime: "2026-10-22T09:00:00Z" }, end: { dateTime: "2026-10-22T10:00:00Z" }, transparency: "transparent" },
+      ],
+    }, { id: "primary", owned: true });
+    expect(events[0]!.transparency).toBe("opaque");
+    expect(events[1]!.transparency).toBe("transparent");
+    expect(busyTimes(events)).toEqual([{ start: Date.parse("2026-10-22T08:00:00Z"), end: Date.parse("2026-10-22T09:00:00Z") }]);
   });
 });

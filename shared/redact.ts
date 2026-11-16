@@ -28,8 +28,13 @@ const KEY_PREFIXES: RegExp[] = [
   /\bxox[abposr]-[A-Za-z0-9-]{20,}/g, // slack
   /\bxapp-\d-[A-Za-z0-9-]{20,}/g, // slack app-level (socket mode) tokens
   /\bAKIA[0-9A-Z]{16}\b/g, // aws access key id
+  /\bASIA[0-9A-Z]{16}\b/g, // aws temporary credential (sts)
   /\bAIza[0-9A-Za-z_-]{30,}/g, // google api key
   /\bnpm_[A-Za-z0-9]{20,}/g, // npm
+  /\bpypi-[A-Za-z0-9_-]{20,}/g, // pypi token
+  /\bntn_[A-Za-z0-9_-]{20,}/g, // notion integration token
+  /\bpplx-[A-Za-z0-9_-]{20,}/g, // perplexity api key
+  /\bSG\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{16,})?/g, // sendgrid api key
   /\bwhsec_[A-Za-z0-9_-]{20,}/g, // webhook secrets, alone or in an automation's address
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // jwt
 ];
