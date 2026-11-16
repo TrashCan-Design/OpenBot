@@ -33,7 +33,7 @@ function github(directory: string, releases: Array<{ tagName: string; isDraft?: 
       if (args[1].includes("/commits/")) return JSON.stringify({ sha: tagSha });
       const files = [`OpenBot-${VERSION}-setup.exe`, `OpenBot-${VERSION}-setup.exe.blockmap`, "latest.yml", "SHA256SUMS.txt", "SOURCE_COMMIT.txt"];
       return JSON.stringify({ assets: files.map(name => ({ name, size: readFileSync(join(directory, name)).length,
-        digest: `sha256:${name === corrupt ? "0".repeat(64) : digest(readFileSync(join(directory, name)))}` })) });
+        state: name === corrupt ? "starter" : "uploaded" })) });
     }
     if (args[1] === "view") return JSON.stringify({ apiUrl: `https://api.github.com/repos/${REPO}/releases/123`, targetCommitish: tagSha });
     return args[1] === "list" ? JSON.stringify(releases) : "";

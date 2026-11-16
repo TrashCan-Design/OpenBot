@@ -77,8 +77,8 @@ jobs:
             echo "::error::v$VERSION already exists in $GITHUB_REPOSITORY"
             exit 1
           fi
-          if git ls-remote --exit-code --heads origin "release/v$VERSION" > /dev/null 2>&1; then
-            echo "::error::release/v$VERSION already exists — use its existing PR"
+          if git ls-remote --exit-code --heads origin "release/$VERSION" > /dev/null 2>&1; then
+            echo "::error::release/$VERSION already exists — use its existing PR"
             exit 1
           fi
 
@@ -91,12 +91,12 @@ jobs:
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "release/v$VERSION"
+          git switch -c "release/$VERSION"
           node scripts/tighten-ratchets.mjs
           node scripts/generate-locale.mjs --record-hashes
           git add package.json scripts/testing/file-size-ratchet.test.ts scripts/testing/index-route-ratchet.test.ts src/locales/source-hashes.json
           git commit -m "chore(release): bump version to $VERSION"
-          git push --set-upstream origin "release/v$VERSION"
+          git push --set-upstream origin "release/$VERSION"
 
       - name: Open the release PR
         id: pr
@@ -106,7 +106,7 @@ jobs:
         run: |
           url=$(gh pr create \
             --base main \
-            --head "release/v$VERSION" \
+            --head "release/$VERSION" \
             --title "chore(release): bump version to $VERSION" \
             --body "Bumps OpenBot to \`$VERSION\`. Merging this PR builds a Windows installer and publishes its updater feed from the merge commit.")
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -120,4 +120,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.next }}
-        run: gh workflow run ci.yml --ref "release/v$VERSION"
+        run: gh workflow run ci.yml --ref "release/$VERSION"

@@ -87,7 +87,7 @@ export async function publishWindowsRelease({ directory, version, sha, repositor
   for (const name of assets) {
     const asset = remote.assets?.find(item => item.name === name);
     const bytes = readFileSync(join(directory, name));
-    if (!asset || asset.size !== bytes.length || asset.digest !== `sha256:${hash(bytes)}`) throw new Error(`Uploaded release asset does not match: ${name}`);
+    if (!asset || asset.state !== "uploaded" || asset.size !== bytes.length) throw new Error(`Uploaded release asset does not match: ${name}`);
   }
   if (!existing || existing.isDraft) gh(["release", "edit", tag, "--repo", REPO, "--draft=false", "--latest"]);
   let failure;

@@ -6,7 +6,7 @@ describe("OpenBot Windows build and updater release", () => {
   it("builds the existing installer branch on Windows with a read-only build token", () => {
     expect(workflow.on.push.branches).toEqual(["codex/windows-installer"]);
     expect(workflow.on.workflow_dispatch.inputs.ref.required).toBe(false);
-    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.permissions).toEqual({ contents: "read", actions: "write" });
     expect(workflow.jobs.package["runs-on"]).toBe("windows-latest");
     expect(workflow.jobs.package.env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
     expect(workflow.jobs.package.steps.some((step: { run?: string }) => step.run === "pnpm package:win")).toBe(true);

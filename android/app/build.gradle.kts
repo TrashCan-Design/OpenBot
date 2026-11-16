@@ -73,9 +73,9 @@ private val appVersionName = "1.0.0"
 
 // Play orders uploads by `versionCode` alone and refuses one it has already
 // seen, so the code has to rise whenever the name does — and rise in the
-// direction a human reads the name. MAJOR * 10000 + MINOR * 100 + PATCH does
-// that for any `X.Y.Z` with each part in 0..99: 1.0.0 is 10000, 1.0.1 is 10001,
-// 1.2.0 is 10200, 2.0.0 is 20000. A name outside that shape fails the build
+// direction a human reads the name. MAJOR * 1000000 + MINOR * 1000 + PATCH does
+// that for any `X.Y.Z` with each part in 0..999: 1.0.0 is 1000000, 1.0.1 is 1000001,
+// 1.2.0 is 1002000, 2.0.0 is 2000000. A name outside that shape fails the build
 // rather than resolving to some number nobody chose.
 //
 // Nothing has shipped under `versionCode = 1`, so opening at 10000 costs
@@ -83,11 +83,11 @@ private val appVersionName = "1.0.0"
 // replace an app with a lower code and Play refuses the upload outright.
 private val appVersionCode = run {
     val parts = appVersionName.split(".").map { it.toIntOrNull() ?: -1 }
-    check(parts.size == 3 && parts.all { it in 0..99 }) {
-        "versionName must be MAJOR.MINOR.PATCH with each part in 0..99 for a " +
+    check(parts.size == 3 && parts.all { it in 0..999 }) {
+        "versionName must be MAJOR.MINOR.PATCH with each part in 0..999 for a " +
             "versionCode to be derived from it; got \"$appVersionName\"."
     }
-    parts[0] * 10_000 + parts[1] * 100 + parts[2]
+    parts[0] * 1_000_000 + parts[1] * 1_000 + parts[2]
 }
 
 android {

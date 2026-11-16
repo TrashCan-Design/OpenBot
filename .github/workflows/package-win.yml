@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: openbot-windows-release
@@ -163,7 +164,7 @@ jobs:
           distribution: "temurin"
           java-version: "17"
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: yes | "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
       - name: Run unit tests
         run: |
           cd android
