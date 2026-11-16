@@ -95,7 +95,7 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler & { deleteTa
     if (phoneSecretSubmissions.hasThread(threadId)) {
       return { status: 409, error: "this task is securely saving a credential — try again when it finishes" };
     }
-    if (threadBusy(botId, threadId) || deps.routines()!.isActiveThread(threadId)) {
+    if (threadBusy(botId, threadId) || (deps.routines()?.isActiveThread(threadId) ?? false)) {
       return { status: 409, error: "this task is running — stop it first" };
     }
     return null;

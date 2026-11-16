@@ -138,7 +138,8 @@ async function readSse(
         buffer = buffer.slice(separator + 2);
         const event = parseSseBlock(block);
         if (event && onEvent(event) === "stop") {
-          await reader.cancel().catch(() => {});
+          void reader.cancel().catch(() => {});
+          reader.releaseLock();
           return;
         }
       }
@@ -159,7 +160,8 @@ async function readBounded(response: Response, maxBytes = MAX_REMOTE_MCP_BYTES):
     if (done) return text + decoder.decode();
     bytes += value.byteLength;
     if (bytes > maxBytes) {
-      await reader.cancel().catch(() => {});
+      void reader.cancel().catch(() => {});
+      reader.releaseLock();
       throw new McpHttpError("protocol", "response too large");
     }
     text += decoder.decode(value, { stream: true });

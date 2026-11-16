@@ -12667,6 +12667,7 @@ ROUTES.push(createLiveRoutes({
 
 const toolResults = new ToolResults();
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+  if (companyShutdown) return json(res, 503, { error: "server is shutting down" });
   if (CLOUD_TEAM) holdBodyDeadline(req, res);
   let url: URL;
   try {
@@ -15720,6 +15721,7 @@ const gracefulShutdown = createGracefulShutdown({
     async () => {
       followupsReady = false;
       companyShutdown = true;
+      server.close();
       // Before any provider is torn down, so what the teardown fails stays cut for the next start.
       coordinator.close();
       noteTurnsCutByShutdown();

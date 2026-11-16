@@ -97,6 +97,9 @@ export function openBoxEgressGate(options: EgressGateOptions): Promise<BoxEgress
     upstream.on("error", () => { if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" }).end("The connection failed.\n"); else res.destroy(); });
     req.pipe(upstream);
   });
+  server.on("connection", (socket) => {
+    track(socket);
+  });
   server.on("connect", async (req: IncomingMessage, client: Duplex, head: Buffer) => {
     track(client);
     const target = parseConnectTarget(req.url);

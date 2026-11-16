@@ -374,10 +374,16 @@ async function stopCliTree(child: ChildProcess, pid: number, timeoutMs: number):
         else child.once("exit", closed);
         return;
       }
+      if (exited()) {
+        done(true);
+        return;
+      }
       try {
         child.kill();
       } catch {
       }
+      if (exited()) done(true);
+      else child.once("exit", closed);
     });
   });
 }
