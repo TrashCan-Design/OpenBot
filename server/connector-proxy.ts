@@ -332,14 +332,51 @@ async function handle(received: Json): Promise<void> {
   }
 }
 
+function decimalValue(text: string): string | null {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
+  if (!match) return null;
+  const fraction = match[3] ?? "";
+  const coefficient = (match[2] + fraction).replace(/^0+/, "");
+  if (!coefficient) return "0";
+  const digits = coefficient.replace(/0+$/, "");
+  const exponent = Number(match[4] ?? "0") - fraction.length + coefficient.length - digits.length;
+  if (!Number.isSafeInteger(exponent)) return null;
+  return `${match[1]}${digits}e${exponent}`;
+}
+
+export function preservesNumericText(text: string, value: number): boolean {
+  if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) return false;
+  const original = decimalValue(text);
+  return original !== null && original === decimalValue(String(value));
+}
+
 const input = readline.createInterface({ input: process.stdin, terminal: false });
 input.on("line", (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
   let message: Json;
+  const unsafeContainers = new WeakSet<object>();
+  const unsafeArgumentOwners = new WeakSet<object>();
   try {
-    message = JSON.parse(trimmed) as Json;
+    message = JSON.parse(trimmed, function (key: string, value: unknown, context?: { source?: string }) {
+      const unsafe = typeof value === "number"
+        ? context?.source === undefined || !preservesNumericText(context.source, value)
+        : value !== null && typeof value === "object" && unsafeContainers.has(value);
+      if (unsafe) {
+        unsafeContainers.add(this);
+        if (key === "arguments") unsafeArgumentOwners.add(this);
+      }
+      return value;
+    }) as Json;
   } catch {
+    return;
+  }
+  if (message.method === "tools/call" && message.params !== null && typeof message.params === "object"
+    && unsafeArgumentOwners.has(message.params)) {
+    if (message.id !== undefined) send(textResult(message.id,
+      'This connected-app call was not sent: an argument contains a numeric literal that cannot be preserved. '
+      + 'Send precision-sensitive IDs as JSON strings when the tool schema accepts strings, for example '
+      + '{"record_id":"9007199254740993"}; otherwise check the original value before retrying.', true));
     return;
   }
   void handle(message).catch((error) => {
