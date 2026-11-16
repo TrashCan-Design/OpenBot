@@ -159,3 +159,14 @@ test("bots' work: a damaged download is thrown away, and a path from My Cloud ne
   assert.equal(s.read("ok.md"), "fine");
   assert.equal(existsSync(join(s.dir, "escape.md")), false);
 });
+
+test("shared: repeated upload failure reports problem instead of masking as copying", async (t) => {
+  const s = setup(t);
+  s.write("fail.txt", "content");
+  s.cloud.client.upload = async () => { throw new Error("storage unreadable"); };
+  await s.share();
+  await s.share();
+  const res = await s.share();
+  assert.equal(res.status, "problem");
+  assert.match(res.problem, /fail\.txt: storage unreadable/);
+});

@@ -169,7 +169,9 @@ export function installTeamMove({ ipcMain, cloudPage, home, account, file, journ
     if (cloudPage(event) !== "cloud") throw new Error(`${channel} is only available on My Cloud in this app`);
     return handler(...args);
   };
-  ipcMain.handle("cloud-send:teams", myCloudPage("cloud-send:teams", () => ({ teams: teams().map(({ id, name, ready }) => ({ id, name, ready })) })));
+  ipcMain.handle("cloud-send:teams", (event) => (cloudPage(event) === "cloud"
+    ? { teams: teams().map(({ id, name, ready }) => ({ id, name, ready })) }
+    : { teams: [] }));
   ipcMain.handle("cloud-send:team-move", myCloudPage("cloud-send:team-move", (botId, teamId, name) => {
     const team = teamOf(String(teamId));
     if (!team) throw new Error("You're not in that team.");

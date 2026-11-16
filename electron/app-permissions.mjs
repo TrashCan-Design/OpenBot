@@ -79,6 +79,8 @@ export function appPermissionHandlers({ rendererOrigin, mainContents, cloudHomeO
   activeRemoteMicrophone = () => false, askRemoteMicrophone = () => null, homeOrigin = () => null }) {
   // Notifications for the main window's main frame on `origin`: My Cloud as home, or the remote server the person
   // switched to (Settings → Notifications there has no browser site settings to fall back on).
+  const embeddedFullscreen = (contents, permission, details) =>
+    permission === "fullscreen" && Boolean(contents) && contents === mainContents() && details?.isMainFrame === false;
   const notifiesAs = (origin, contents, permission, requesting, details) => {
     const page = webOrigin(origin);
     return permission === "notifications" && Boolean(page) && Boolean(contents) && contents === mainContents() &&
@@ -94,6 +96,7 @@ export function appPermissionHandlers({ rendererOrigin, mainContents, cloudHomeO
       remoteClipboardWriteAllowed(permission, requesting, cloudHomeOrigin(), details));
   const allowed = (contents, permission, requesting, details) =>
     appPermissionAllowed(permission, requesting, rendererOrigin(), details) ||
+    embeddedFullscreen(contents, permission, details) ||
     (asksAsCloud(contents, permission, requesting, details) && mainFrameMicrophoneAllowed(permission, requesting, cloudHomeOrigin(), details)) ||
     (asksAsRemote(contents, permission, requesting, details) && activeRemoteMicrophone() === true) ||
     clipboardWrite(contents, permission, requesting, details) ||

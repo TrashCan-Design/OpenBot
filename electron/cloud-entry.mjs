@@ -1,7 +1,8 @@
 // An action, not a router: it never carries an address, code or credential.
 export const CLOUD_DEEP_LINK = "openmausbot://cloud";
+export const CLOUD_DEEP_LINKS = new Set(["openbot://cloud", "openmausbot://cloud"]);
 
-export const isCloudDeepLink = value => value === CLOUD_DEEP_LINK;
+export const isCloudDeepLink = value => CLOUD_DEEP_LINKS.has(value);
 export function takeCloudDeepLink(argv) {
   let found = false;
   // Relaunch reuses process.argv: consume only this one-shot action, leaving flags and other links untouched.

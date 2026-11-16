@@ -83,7 +83,12 @@ export function createSyncClient({ origin, fetch: fetchImpl, power = null, chunk
         while (received < size) {
           const length = Math.min(chunk, size - received);
           const buffer = Buffer.alloc(length);
-          if (readSync(fd, buffer, 0, length, received) !== length) throw new Error("The file changed while it was being sent.");
+          let readBytes = 0;
+          while (readBytes < length) {
+            const bytesRead = readSync(fd, buffer, readBytes, length - readBytes, received + readBytes);
+            if (bytesRead === 0) throw new Error("The file changed while it was being sent.");
+            readBytes += bytesRead;
+          }
           let response;
           try {
             response = await call("PUT", `/api/sync/uploads/${begun.uploadId}?offset=${received}`, { raw: buffer, timeoutMs: 30_000 + Math.ceil(length / SLOWEST) });

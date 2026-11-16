@@ -536,3 +536,18 @@ test("the active remote server's page may show notifications, in the main window
   assert.equal(ask(onRemote()), false, "no active remote: at once");
   for (const requesting of ["about:blank", "data:text/html,x", ""]) assert.equal(ask(onRemote({ requestingUrl: requesting })), false, `${requesting || "(empty)"}`);
 });
+
+test("embedded chat videos in the main window may use fullscreen", () => {
+  const main = { getURL: () => `${LOCAL_PAGE}` };
+  const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => main, cloudHomeOrigin: () => null });
+  const ask = (permission, details, contents = main) => {
+    let granted;
+    handlers.request(contents, permission, (value) => { granted = value; }, details);
+    return granted;
+  };
+  assert.equal(ask("fullscreen", { requestingUrl: "https://www.youtube.com/embed/xyz", isMainFrame: false }), true);
+  assert.equal(handlers.check(main, "fullscreen", "https://www.youtube.com/embed/xyz", { isMainFrame: false }), true);
+  assert.equal(ask("fullscreen", { requestingUrl: "https://www.youtube.com/embed/xyz", isMainFrame: false }, { getURL: () => "http://other" }), false, "another window");
+  assert.equal(ask("fullscreen", { requestingUrl: "https://www.youtube.com/embed/xyz", isMainFrame: true }), false, "main frame on another origin");
+  assert.equal(ask("notifications", { requestingUrl: "https://www.youtube.com/embed/xyz", isMainFrame: false }), false, "not fullscreen");
+});

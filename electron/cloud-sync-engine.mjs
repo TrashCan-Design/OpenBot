@@ -85,7 +85,7 @@ export async function shareFolder({ client, state, folder, local, now = Date.now
       if (answer?.ok || answer?.conflict) state.dropBase(folder.id, wire);
     });
   }
-  result.status = result.pendingDeletes ? "confirm-deletes" : result.waitingBytes ? "waiting" : result.done < result.files ? "copying" : result.problem ? "problem" : "synced";
+  result.status = result.pendingDeletes ? "confirm-deletes" : result.waitingBytes ? "waiting" : result.problem ? "problem" : result.done < result.files ? "copying" : "synced";
   return result;
 }
 

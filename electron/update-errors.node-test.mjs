@@ -21,6 +21,8 @@ test("update failures keep integrity and certificate errors distinct from recove
   assert.match(updateErrorMessage(Object.assign(new Error("connection failed"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" })), /do not disable certificate checks/);
   assert.match(updateErrorMessage(Object.assign(new Error('publisherNames differ. SignerCertificate: {"Subject":"CN=Unexpected"}'), { code: "ERR_UPDATER_INVALID_SIGNATURE" })), /failed verification/);
   assert.match(updateErrorMessage(new Error('ERR_UPDATER_INVALID_SIGNATURE: SignerCertificate mismatch')), /failed verification/);
+  assert.match(updateErrorMessage(new Error("HTTP 500: signature verification failed on upstream server")), /connection and try again/);
+  assert.match(updateErrorMessage(Object.assign(new Error("Cannot download https://github...&X-Amz-Signature=abc: server error"), { statusCode: 502 })), /connection and try again/);
   assert.equal(updateErrorMessage(new Error("unknown failure")), "unknown failure");
 });
 
@@ -29,7 +31,7 @@ test("only failures the person must fix are theirs to see when nobody asked", ()
     assert.equal(updateErrorNeedsPerson(new Error(message)), true, message);
   }
   assert.equal(updateErrorNeedsPerson(Object.assign(new Error("sha512 mismatch"), { code: "ERR_UPDATER_CHECKSUM_MISMATCH" })), true);
-  for (const message of ["ETIMEDOUT", "ECONNRESET", "HTTP 503 Service Unavailable", "net::ERR_INTERNET_DISCONNECTED", "Cannot find latest-mac.yml: 404", "net::ERR_CERT_AUTHORITY_INVALID", "unknown failure"]) {
+  for (const message of ["ETIMEDOUT", "ECONNRESET", "HTTP 503 Service Unavailable", "HTTP 500: signature error", "net::ERR_INTERNET_DISCONNECTED", "Cannot find latest-mac.yml: 404", "net::ERR_CERT_AUTHORITY_INVALID", "unknown failure"]) {
     assert.equal(updateErrorNeedsPerson(new Error(message)), false, message);
   }
 });

@@ -17,6 +17,11 @@ export function updateErrorMessage(error) {
   if (!integrity && tls) {
     return "The update connection could not be verified. Check your clock, VPN or proxy; do not disable certificate checks.";
   }
+  if (!integrity && (/\bHTTP[^\n]*\b5\d\d\b|status(?: code)?[: ]+5\d\d\b/i.test(detail) ||
+    (typeof error?.statusCode === "number" && error.statusCode >= 500 && error.statusCode < 600) ||
+    (typeof error?.status === "number" && error.status >= 500 && error.status < 600))) {
+    return "The update download was interrupted or the server is unavailable. Check your connection and try again.";
+  }
   // Integrity failures must never be explained away as a network/disk issue.
   if (integrity || /checksum|signature|codesign/i.test(detail)) {
     return INTEGRITY;

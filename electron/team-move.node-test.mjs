@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BUSY_POLL_MS, CHECK_PASSES, createTeamMove, RETRY_MS, routinesOn } from "./team-move.mjs";
+import { installTeamMove } from "./team-move-main.mjs";
 
 const ACME = { id: "team-acme", name: "Acme", origin: "https://omb-u-acme.fly.dev" };
 const SCOUT = { id: "scout-1", name: "Scout" };
@@ -182,4 +183,22 @@ test("one move per bot: starting it again goes on with it, to another team is re
 test("the routines switched on in the team are those that were on on My Cloud", () => {
   assert.deepEqual(routinesOn(["routine:r1", "webhook:w1", "app-event:a1", "routine:r2", 4, "routine:"]), ["routine:r1", "routine:r2"]);
   assert.deepEqual(routinesOn(undefined), []);
+});
+
+test("cloud-send:teams returns empty array outside My Cloud without throwing", async () => {
+  const handlers = new Map();
+  const ipcMain = { handle: (channel, fn) => handlers.set(channel, fn) };
+  let page = "local";
+  installTeamMove({
+    ipcMain,
+    cloudPage: () => page,
+    home: () => ({ origin: "https://mycloud.test", grant: async () => ({ origin: "https://mycloud.test", code: "c" }) }),
+    account: () => ({ state: () => ({ status: "connected", teams: [{ id: "t1", name: "Team 1", machine: { origin: "https://t1.test", status: "ready" } }] }) }),
+    file: () => "/tmp/unused-send.json",
+    journalFile: () => "/tmp/unused-journal.json",
+  });
+  const teamsHandler = handlers.get("cloud-send:teams");
+  assert.deepEqual(await teamsHandler({}), { teams: [] });
+  page = "cloud";
+  assert.deepEqual(await teamsHandler({}), { teams: [{ id: "t1", name: "Team 1", ready: true }] });
 });
