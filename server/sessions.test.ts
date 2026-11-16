@@ -85,6 +85,23 @@ describe("the native-app encoding of a pairing window", () => {
     expect(locked.status).toBe(429);
   });
 
+  it("burns open pairing codes on failed attempts from loopback or unknown without locking out", () => {
+    for (const source of ["127.0.0.1", "unknown", "::1", "localhost"]) {
+      registry.openPairing();
+      expect(registry.openPairings()).toHaveLength(1);
+      const wrong = registry.exchange({ code: generatePairingCredential(), label: "", source });
+      expect(wrong.ok).toBe(false);
+      expect(wrong.status).toBe(401);
+      expect(registry.openPairings()).toHaveLength(0);
+      for (let attempt = 0; attempt < LOCKOUT.failures + 1; attempt += 1) {
+        registry.exchange({ code: generatePairingCredential(), label: "", source });
+      }
+      const fresh = registry.openPairing();
+      const retry = registry.exchange({ code: fresh.credential, label: "local client", source });
+      expect(retry.ok).toBe(true);
+    }
+  });
+
   it("mints a fresh credential for every window", () => {
     const seen = new Set([...Array(20)].map(() => registry.openPairing().credential));
     expect(seen.size).toBe(20);

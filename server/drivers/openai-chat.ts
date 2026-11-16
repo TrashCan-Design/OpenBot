@@ -251,6 +251,13 @@ class RejectedToolCallError extends ChatProtocolError {
   }
 }
 
+export class StreamTruncatedError extends ChatProtocolError {
+  constructor(message = "Stream ended before completion") {
+    super(message);
+    this.name = "StreamTruncatedError";
+  }
+}
+
 const toolCallRefusal = (error: unknown) => {
   const body = object(error);
   return body?.code === "tool_use_failed" ? body : undefined;
@@ -504,7 +511,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
               const bodyError = body ? completionError(body, "completion error") : null;
               if (bodyError) throw bodyError;
             }
-            throw new ChatProtocolError("Stream ended before completion");
+            throw new StreamTruncatedError("Stream ended before completion");
           }
           resetIdleTimer();
           buffer += decoder.decode(value, { stream: true });
@@ -736,11 +743,14 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
                 tools.definitions.length = 0;
                 continue;
               }
+              const isTruncated = error instanceof StreamTruncatedError || (error instanceof ChatProtocolError && error.message === "Stream ended before completion");
+              const retryable = !streamed && !seenCalls.size && isTruncated;
               // Once a call has been handled, never replay it through a turn retry.
               if (options.retryScale === undefined || abort.signal.aborted || streamed || seenCalls.size ||
-                  error instanceof ChatProtocolError || !verdict.transient || attempt >= RETRY_MAX_ATTEMPTS - 1) throw error;
+                  (error instanceof ChatProtocolError && !retryable) || (!verdict.transient && !retryable) || attempt >= RETRY_MAX_ATTEMPTS - 1) throw error;
               const delayMs = (error as { retryAfterMs?: number }).retryAfterMs ?? computeBackoff(attempt++);
-              emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt, delayMs, reason: verdict.reason });
+              const reason = retryable && !verdict.transient ? "stream_truncated" : verdict.reason;
+              emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt, delayMs, reason });
               await interruptibleDelay(delayMs * options.retryScale, abort.signal).promise;
               abort.signal.throwIfAborted();
             }

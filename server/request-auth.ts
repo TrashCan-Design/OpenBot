@@ -128,6 +128,10 @@ export function isLoopbackHost(host: string | undefined): boolean {
 
   if (hostname === "localhost" || hostname === "localhost.") return true;
   if (isIP(hostname) === 4) return hostname.startsWith("127.");
+  if (hostname.startsWith("::ffff:")) {
+    const v4 = hostname.slice(7);
+    if (isIP(v4) === 4 && v4.startsWith("127.")) return true;
+  }
   return hostname === "::1" || hostname === "0:0:0:0:0:0:0:1";
 }
 
@@ -179,7 +183,9 @@ export function requestOrigin(req: IncomingMessage): string | null {
 /** A proxy that hands the server a loopback Host must not turn a remote client into the owner. */
 export function isProxied(req: IncomingMessage): boolean {
   const h = req.headers;
-  return ipcPeer(req) || Boolean(h["x-forwarded-for"] || h["x-forwarded-proto"] || h["x-forwarded-host"] || h["forwarded"]);
+  const remote = req.socket?.remoteAddress;
+  const remotePeer = Boolean(remote && !isLoopbackHost(remote));
+  return ipcPeer(req) || remotePeer || Boolean(h["x-forwarded-for"] || h["x-forwarded-proto"] || h["x-forwarded-host"] || h["forwarded"]);
 }
 
 /** An IPC listener's only peer is a forwarding gateway, so its requests are remote: never loopback trust. */

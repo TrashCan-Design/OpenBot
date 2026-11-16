@@ -53,7 +53,8 @@ import { supportsApprovalMode } from "../../../shared/approval-mode.ts";
 import { MAX_QUESTION_TEXT, parseAskQuestions, parseChoices, questionAnswersByQuestion } from "../../../shared/ask-question.ts";
 
 import { appendNative } from "../native.ts";
-import { acpDesktopTool, acpSessionOperationKey, acpShellRequest, answersAlone, permissionLaunchCwd } from "../permission-command.ts"; import { acpReadPaths } from "../../own-file-reads.ts";
+import { acpCommand, acpDesktopTool, acpSessionOperationKey, acpShellRequest, answersAlone, permissionLaunchCwd } from "../permission-command.ts"; import { acpReadPaths } from "../../own-file-reads.ts";
+import { acpMissingSession } from "./rpc-error.ts";
 import { openQuestionRequest, questionRequestFor, type AcpQuestionRequest } from "./question-requests.ts";
 import { commandSummary, toolDetailPreview } from "../../tool-summary.ts";
 import { acpToolEndEvents } from "./tool-items.ts"; import { screenshotWasRequested } from "../../screenshot-request.ts";
@@ -758,7 +759,8 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
 
           const toolCall = params.toolCall ?? {};
           const isQuestion = String(toolCall.toolCallId ?? "").startsWith("interaction_");
-          if (current.turnConfig.fullAuto && current.turn.approvalMode === undefined && !isQuestion && answersAlone(toolCall.rawInput?.command)) {
+          const cmd = acpCommand(toolCall.rawInput);
+          if (current.turnConfig.fullAuto && current.turn.approvalMode === undefined && !isQuestion && answersAlone(cmd)) {
             const allow = optionFor("allow");
             if (!allow) missing("allow");
             return send({
@@ -770,7 +772,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           const kind = String(toolCall.kind ?? "");
           const desktopTool = acpDesktopTool(toolCall);
           const operationKey = isQuestion || current.controlsHost ? null : acpSessionOperationKey(toolCall);
-          if (operationKey && (desktopTool || answersAlone(toolCall.rawInput?.command)) && sessionAllows.get(threadId)?.has(operationKey)) {
+          if (operationKey && (desktopTool || answersAlone(cmd)) && sessionAllows.get(threadId)?.has(operationKey)) {
             const allow = optionFor("allow");
             if (allow) {
               return send({ jsonrpc: "2.0", id: msg.id, result: { outcome: { outcome: "selected", optionId: allow } } });
@@ -778,7 +780,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           }
           const tool = kind === "execute" ? "shell" : kind === "edit" ? "edit" : kind || "tool";
           const isShellCommand = !isQuestion && kind === "execute" && !/^mcp(?:__|[.:])/i.test(String(toolCall.title ?? ""));
-          const rawSummary = String(toolCall.rawInput?.command ?? toolCall.title ?? tool);
+          const rawSummary = String(cmd ?? toolCall.title ?? tool);
           const summary = rawSummary.slice(0, isQuestion ? MAX_QUESTION_TEXT : 200);
           const questionChoices = isQuestion
             ? options.flatMap((option) => typeof option.name === "string" && option.name.trim() ? [option.name.trim()] : [])
@@ -1301,11 +1303,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   );
                 } catch (error) {
                   const classification = support.classifyError?.(error);
-                  // OpenCode encodes ACPSessionNotFoundError as invalidParams with just the rejected
-                  // sessionId; other invalidParams (model/config errors) must not erase history.
-                  const data = (error as any)?.data;
-                  const missingSession = data && typeof data === "object" && !Array.isArray(data)
-                    && data.sessionId === cursor && Object.keys(data).length === 1;
+                  // OpenCode sends invalidParams with only the rejected sessionId. Cursor puts the id in the
+                  // message: Invalid params: Session "<id>" not found (session/load). Other invalidParams must not
+                  // erase history.
+                  const missingSession = acpMissingSession(error, cursor);
                   if (classification === "invalid_credentials" || classification === "inactive_subscription"
                       || ((error as any)?.code === -32602 && !missingSession)) throw error;
                 }

@@ -2117,8 +2117,17 @@ const teamComputerTurns = new Map<string, { owner: TurnOwner; computerId: string
 const turnPlaces = new Map<string, { botId: string; place: Surface }>();
 const settlingResourceOwners = new Map<string, string>();
 
+const personHoldsSeat = (seat: string): boolean => {
+  if (seat === `computer:vm:${SHARED_LOCAL_VM_TARGET.key}` && computerControl.snapshot("desktop:local/shared").held) return true;
+  return computerControl.snapshot(seat).held;
+};
+const parkedSeatTaken = (nodeId: string): boolean => {
+  const seat = parkedSeats.get(nodeId);
+  return seat !== undefined && (!turnResources.free(seat) || personHoldsSeat(seat));
+};
+
 function claimTurnResource(owner: TurnOwner, resource: string): boolean {
-  if (!turnResources.claim(resource, owner)) return false;
+  if ((personHoldsSeat(resource) && !turnResources.owns(resource, owner)) || !turnResources.claim(resource, owner)) return false;
   turnResourceOwners.set(owner.threadId, owner);
   return true;
 }
@@ -3865,8 +3874,7 @@ const coordinator: Coordinator = createCoordinator({
       : roomHandoffProblem(node, parent) ??
       (parent && store.bot(parent.botId)?.approvePeerComms && !fullAccessForSource(parent.botId, parent.threadId) && !node.approvalGranted ? "Sender now requires peer approval; submit a new approved request" : undefined),
     busy: n => {
-      const seat = parkedSeats.get(n.id);
-      if (seat && !turnResources.free(seat)) return true;
+      if (parkedSeatTaken(n.id)) return true;
       if (n.groupId) return Boolean(store.bot(n.botId)?.busy || groupThreadIsWorking(n.groupId, n.threadId));
       if (canAdmitDirectTurn(n.botId, n.threadId)) return false;
       noteQueuedBehindPerson(n);
@@ -15576,6 +15584,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     return json(res, 404, { error: `no route: ${method} ${path}` });
   } catch (e) {
+    if (res.headersSent) {
+      if (!res.destroyed) res.destroy();
+      return;
+    }
     const status = (e as any)?.status ?? 500;
     const candidateCode = (e as { code?: unknown })?.code;
     const code = typeof candidateCode === "string" && ["guarded_busy", "guarded_branch", "guarded_permissions", "guarded_request_changed", "guarded_request_untracked", "outside_workspace"].includes(candidateCode)

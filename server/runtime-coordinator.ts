@@ -116,6 +116,8 @@ export class RuntimeCoordinator implements Coordinator {
   private readonly legacyThreads: LegacyThreadResolver | undefined;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
+  /** The cause of the stop running now, if any (stopFor). */
+  private stopCause: string | undefined;
   private opened = false;
   private prunedAt: number | undefined;
 
@@ -354,20 +356,34 @@ export class RuntimeCoordinator implements Coordinator {
 
   cancelRoom(groupId: string, threadId?: string, reason = "Stopped by user", status: "failed" | "cancelled" = "cancelled"): void {
     this.ready();
-    for (const n of this.live()) {
-      if (n.assignee.destination.groupId !== groupId || (threadId && n.assignee.destination.threadId !== threadId)) continue;
-      this.runtime.cancel(n.id, reason, status === "failed" ? "failed" : "stopped");
-    }
+    this.stopFor(reason, () => {
+      for (const n of this.live()) {
+        if (n.assignee.destination.groupId !== groupId || (threadId && n.assignee.destination.threadId !== threadId)) continue;
+        this.runtime.cancel(n.id, reason, status === "failed" ? "failed" : "stopped");
+      }
+    });
   }
 
   cancelDirect(threadId: string, reason = "Stopped by user"): void {
     this.ready();
-    for (const n of this.live()) if (this.direct(n, threadId)) this.runtime.cancel(n.id, reason, "stopped");
+    this.stopFor(reason, () => { for (const n of this.live()) if (this.direct(n, threadId)) this.runtime.cancel(n.id, reason, "stopped"); });
   }
 
-  stopAwaitingDirect(threadId: string, reason = "Stopped by user"): HandoffView[] {
+  /** With no reason given, the stop is the person's, unless it is part of a stop already under way: see stopFor. */
+  stopAwaitingDirect(threadId: string, reason?: string): HandoffView[] {
     this.ready();
-    return this.runtime.stopRequester({ threadId }, reason).map(a => this.project(a));
+    const cause = reason ?? this.stopCause ?? "Stopped by user";
+    let stopped: HandoffView[] = [];
+    this.stopFor(cause, () => {
+      stopped = this.runtime.stopRequester({ threadId }, cause).map(a => this.project(a));
+    });
+    return stopped;
+  }
+
+  private stopFor(cause: string, stop: () => void): void {
+    const outer = this.stopCause;
+    this.stopCause = cause;
+    try { stop(); } finally { this.stopCause = outer; }
   }
 
   activeDirect(threadId: string): boolean {

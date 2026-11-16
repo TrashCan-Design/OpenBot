@@ -27,6 +27,10 @@ export function onParsedBody(req: IncomingMessage, check: (body: unknown) => { s
 }
 
 export function json(res: ServerResponse, status: number, body: unknown) {
+  if (res.headersSent) {
+    if (!res.destroyed) res.destroy();
+    return;
+  }
   const hook = jsonHooks.get(res);
   const data = JSON.stringify(hook ? hook(body) : body);
   const headers = { "content-type": "application/json" };

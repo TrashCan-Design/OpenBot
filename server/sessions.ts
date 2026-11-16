@@ -225,6 +225,12 @@ export interface SessionStoreOptions {
   portalMembership?: boolean;
 }
 
+function isLoopbackOrUnknownSource(source: string): boolean {
+  if (!source || source === "unknown") return true;
+  const s = source.toLowerCase();
+  return s === "127.0.0.1" || s === "::1" || s === "localhost" || s.startsWith("127.") || s.startsWith("::ffff:127.");
+}
+
 export class SessionRegistry {
   private sessions: SessionRecord[] = [];
   private pairings: PairingCode[] = [];
@@ -403,6 +409,10 @@ export class SessionRegistry {
   }
 
   private recordFailure(source: string): void {
+    if (isLoopbackOrUnknownSource(source)) {
+      this.pairings = [];
+      return;
+    }
     const now = this.now();
     const entry = this.failures.get(source) ?? { count: 0, windowStart: now, lockedUntil: 0 };
     if (now - entry.windowStart > LOCKOUT.windowMs) {

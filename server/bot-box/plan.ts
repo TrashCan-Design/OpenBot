@@ -128,6 +128,8 @@ export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
     { kind: "ro", source: "/etc", target: "/etc" },
     { kind: "ro", source: "/opt", target: "/opt", optional: true },
     { kind: "ro", source: "/var/lib", target: "/var/lib", optional: true },
+    { kind: "ro", source: "/sys/devices/system/cpu/possible", target: "/sys/devices/system/cpu/possible", optional: true },
+    { kind: "ro", source: "/sys/devices/system/cpu/online", target: "/sys/devices/system/cpu/online", optional: true },
   ];
   for (const root of setup.codeRoots) {
     const code = resolve(root);

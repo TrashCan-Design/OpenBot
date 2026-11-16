@@ -396,12 +396,18 @@ describe("resolveRequestAuth", () => {
     expect(isProxied(request({ host: "localhost", "x-forwarded-for": "203.0.113.9" }))).toBe(true);
     expect(isProxied(request({ host: "localhost", "x-forwarded-proto": "https" }))).toBe(true);
     expect(isProxied(request({ host: "localhost" }))).toBe(false);
+    expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "192.168.1.100" } } as unknown as IncomingMessage)).toBe(true);
+    expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);
+    expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "::ffff:127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);
     const viaProxy = resolve({ host: "localhost", "x-forwarded-for": "203.0.113.9" });
     expect(viaProxy.auth).toBeNull();
     expect(viaProxy.status).toBe(403);
     expect(viaProxy.error).toMatch(/came through a proxy.*pair this device/);
     const rewritten = resolve({ host: "127.0.0.1:8799", "x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.9" });
     expect(rewritten.auth).toBeNull();
+    const remoteClient = resolveRequestAuth({ headers: { host: "127.0.0.1" }, method: "GET", socket: { remoteAddress: "10.0.0.5" } } as unknown as IncomingMessage, { sessions, cookieName, streamPath: "/api/events", url: new URL("/api/bots", "http://x") });
+    expect(remoteClient.auth).toBeNull();
+    expect(remoteClient.status).toBe(403);
     const token = pairedToken();
     expect(resolve({ host: "localhost", "x-forwarded-for": "203.0.113.9", authorization: `Bearer ${token}` }).auth?.kind).toBe("session");
   });

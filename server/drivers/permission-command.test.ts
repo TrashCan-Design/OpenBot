@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { acpPermissionCommand, permissionCommand } from "./permission-command.ts";
+import { acpCommand, acpPermissionCommand, acpShellRequest, permissionCommand } from "./permission-command.ts";
 
 const CWD = "/home/user/work";
 
@@ -39,6 +39,20 @@ describe("acpPermissionCommand", () => {
     expect(acpPermissionCommand({ CommandLine: "", Cwd: CWD }, undefined)).toBeUndefined();
     expect(acpPermissionCommand(null, CWD)).toBeUndefined();
     expect(acpPermissionCommand(["ls"], CWD)).toBeUndefined();
+  });
+
+  it("extracts command from CommandLine or command via acpCommand and acpShellRequest", () => {
+    expect(acpCommand({ CommandLine: "npm test" })).toBe("npm test");
+    expect(acpCommand({ command: "npm test" })).toBe("npm test");
+    expect(acpCommand({ command: "a", CommandLine: "b" })).toBeUndefined();
+    expect(acpShellRequest(true, { CommandLine: "echo hello", Cwd: CWD }, undefined)).toEqual({
+      command: { command: "echo hello", cwd: CWD },
+      commandLine: "echo hello",
+    });
+    expect(acpShellRequest(false, { CommandLine: "echo hello" }, undefined)).toEqual({
+      command: undefined,
+      commandLine: "echo hello",
+    });
   });
 });
 
