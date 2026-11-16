@@ -422,7 +422,7 @@ class CompanionClient(
         check(raw)
         val declared = raw.headers["Content-Length"]?.trim()?.toLongOrNull() ?: -1L
         if (declared > MAXIMUM_FILE_DOWNLOAD_BYTES || raw.data.size > MAXIMUM_FILE_DOWNLOAD_BYTES) {
-            throw APIError.Transport("That file is larger than 25 MB.")
+            throw APIError.Transport("That file is larger than 100 MB.")
         }
         val rawContentType = raw.headers["Content-Type"].orEmpty()
         val contentType = if (AttachmentPolicy.validMime(rawContentType)) {
@@ -532,7 +532,7 @@ class CompanionClient(
         if (
             displayName.isEmpty() || displayName.toByteArray().size > 255 ||
             !validUploadMime(normalized) || data.size > SHARE_FILE_MAX_BYTES
-        ) throw APIError.Transport("Choose a file up to 25 MB with a valid filename.")
+        ) throw APIError.Transport("Choose a file up to 100 MB with a valid filename.")
         val saved = send<FileUploadResponse>(
             makeRequest(
                 "POST",
@@ -1053,6 +1053,12 @@ class CompanionClient(
             override fun onResponse(call: Call, response: Response) {
                 try {
                     response.use {
+                        val declaredLength = response.headers["Content-Length"]?.trim()?.toLongOrNull()
+                            ?: response.body?.contentLength()
+                            ?: -1L
+                        if (declaredLength > MAXIMUM_FILE_DOWNLOAD_BYTES) {
+                            throw APIError.Transport("That file is larger than 100 MB.")
+                        }
                         val result = RawResponse(
                             code = response.code,
                             headers = response.headers,
@@ -1063,7 +1069,8 @@ class CompanionClient(
                 } catch (error: IOException) {
                     if (continuation.isActive) {
                         continuation.resumeWithException(
-                            APIError.Transport(error.message ?: "Could not reach the computer.", error),
+                            if (error is APIError) error
+                            else APIError.Transport(error.message ?: "Could not reach the computer.", error),
                         )
                     }
                 }
@@ -1095,7 +1102,7 @@ class CompanionClient(
         private const val CLAUDE_UPDATE_TIMEOUT_SECONDS = 200L
         private const val STREAM_IDLE_TIMEOUT_SECONDS = 90L
         private const val AVATAR_MAX_BYTES = 10 * 1_024 * 1_024
-        const val SHARE_FILE_MAX_BYTES = 25 * 1_024 * 1_024
+        const val SHARE_FILE_MAX_BYTES = 100 * 1_024 * 1_024
         const val MAXIMUM_FILE_DOWNLOAD_BYTES = AttachmentPolicy.MAXIMUM_FILE_BYTES
 
         /**

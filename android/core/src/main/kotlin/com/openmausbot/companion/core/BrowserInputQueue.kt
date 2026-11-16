@@ -2,6 +2,7 @@ package com.openmausbot.companion.core
 
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -156,6 +157,7 @@ class BrowserInputQueue(
             try {
                 send(body)
             } catch (cause: Throwable) {
+                if (cause is CancellationException) throw cause
                 lock.withLock { if (current == generation) haltLocked(cause) }
             }
         }

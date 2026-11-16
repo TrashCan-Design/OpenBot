@@ -35,7 +35,7 @@ class ServerSessionPairingTest {
             assertEquals("Pixel", body["label"]?.jsonPrimitive?.content)
             assertEquals("attempt-1234", body["attemptId"]?.jsonPrimitive?.content)
             assertNull(body["cookie"])
-            assertEquals("/.well-known/openmausbot/environment", fixture.requests.first().url.encodedPath)
+            assertEquals("/.well-known/openbot/environment", fixture.requests.first().url.encodedPath)
             assertTrue(fixture.requests.none { it.url.encodedPath == "/api/pair" })
         }
     }

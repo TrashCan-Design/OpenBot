@@ -1405,6 +1405,7 @@ class Session(
             _actionError.value = error.message
             false
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             false
         }
@@ -1471,6 +1472,7 @@ class Session(
             if (reportError) _actionError.value = error.message
             null
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             if (reportError) _actionError.value = error.message
             null
         }
@@ -1652,6 +1654,7 @@ class Session(
             }
             TypedAnswerResult.Failed(error.message ?: "Couldn't send this message. Try again.")
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             TypedAnswerResult.Failed(error.message ?: "Couldn't send this message. Try again.")
         }
     }
@@ -1668,6 +1671,7 @@ class Session(
             _state.update { it.apply(Frame.Bot(bot)) }
             bot
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             null
         }
@@ -1680,6 +1684,7 @@ class Session(
             _state.update { it.apply(Frame.Room(room)) }
             room
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             null
         }
@@ -1699,6 +1704,7 @@ class Session(
                 }
             }
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             null
         }
@@ -1857,6 +1863,7 @@ class Session(
             val page = activeClient.messages(threadId, before = oldest.id, limit = 50)
             _state.update { it.prepend(page, threadId) }
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
         }
     }
@@ -1864,7 +1871,8 @@ class Session(
     suspend fun image(threadId: String, messageId: String): ByteArray? =
         try {
             client?.image(threadId, messageId)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             null
         }
 
@@ -1875,6 +1883,7 @@ class Session(
         return try {
             activeClient.search(trimmed)
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             emptyList()
         }
@@ -1911,6 +1920,7 @@ class Session(
             }
             null
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             null
         }

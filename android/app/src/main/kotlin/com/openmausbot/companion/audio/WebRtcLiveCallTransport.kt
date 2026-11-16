@@ -171,13 +171,13 @@ internal class WebRtcLiveCallTransport(context: Context) : LiveCallTransport {
             it.dispose()
         }
         channel = null
-        microphone?.dispose()
-        microphone = null
         peer?.let {
             it.close()
             it.dispose()
         }
         peer = null
+        microphone?.dispose()
+        microphone = null
         // The track holds the source natively but never releases this handle
         // on it, so without this every call would leak one audio source.
         source?.dispose()

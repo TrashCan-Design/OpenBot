@@ -103,7 +103,7 @@ data class Connection(
      * reaches a local address this phone did not pair through.
      */
     fun pinningRouteConsent(winner: CompanionEndpoint?, invite: Connection): Connection = consenting(
-        winner?.takeUnless { it.protectsCredentials }
+        winner
             ?: invite.activeEndpoint
             ?: CompanionEndpoint.direct(invite.host, invite.port, priority = 0),
         emptyList(),

@@ -40,7 +40,7 @@ data class LoadedShareItems(
 object ShareItemLoader {
     private const val COPY_CHUNK_BYTES = 64 * 1_024
     /** iOS copy ceiling for both image and file branches (`ShareItemLoader.swift:268`). */
-    private const val COPY_LIMIT_MB = 25
+    private const val COPY_LIMIT_MB = 100
     private const val COPY_LIMIT_BYTES = COPY_LIMIT_MB * 1_024L * 1_024L
     private const val THUMBNAIL_MAX_PIXELS = 3_072
 
@@ -239,7 +239,7 @@ object ShareItemLoader {
         }
         if (size > SharePolicy.MAXIMUM_FILE_BYTES.toLong()) {
             target.delete()
-            throw ShareLoadException(SharePolicy.tooLarge(displayName, 25))
+            throw ShareLoadException(SharePolicy.tooLarge(displayName, 100))
         }
         if (resolvedMime !in SharePolicy.DOCUMENT_MIMES) {
             target.delete()

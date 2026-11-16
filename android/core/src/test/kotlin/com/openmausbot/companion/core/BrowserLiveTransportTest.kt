@@ -87,7 +87,7 @@ class BrowserLiveTransportTest {
             val refused = runCatching { live.action("fixture", "viewer", buildJsonObject { put("type", "take") }) }.exceptionOrNull()
             assertEquals(401, assertIs<APIError.Status>(refused).code)
             val probe = assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
-            assertEquals("/.well-known/openmausbot/environment", probe.path)
+            assertEquals("/.well-known/openbot/environment", probe.path)
             assertEquals(null, probe.getHeader("Authorization"))
             assertEquals(1, server.requestCount)
         }

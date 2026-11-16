@@ -38,7 +38,7 @@ object AttachmentPolicy {
     const val MAXIMUM_ITEMS: Int = 4
     const val MAXIMUM_TOTAL_BYTES: Int = 50 * 1_024 * 1_024
     const val MAXIMUM_IMAGE_BYTES: Int = 10 * 1_024 * 1_024
-    const val MAXIMUM_FILE_BYTES: Int = 25 * 1_024 * 1_024
+    const val MAXIMUM_FILE_BYTES: Int = 100 * 1_024 * 1_024
 
     val IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
 
@@ -54,6 +54,11 @@ object AttachmentPolicy {
         "application/vnd.oasis.opendocument.text",
         "application/vnd.oasis.opendocument.spreadsheet",
         "application/vnd.oasis.opendocument.presentation",
+        "application/zip", "application/x-zip-compressed",
+        "application/x-tar", "application/tar",
+        "application/gzip", "application/x-gzip",
+        "application/x-7z-compressed",
+        "application/vnd.rar", "application/x-rar-compressed",
     )
 
     const val TOO_MANY_ITEMS: String = "Attach up to 4 items at a time."
@@ -96,7 +101,7 @@ object AttachmentPolicy {
                 PendingMessageAttachment.Kind.FILE -> {
                     if (mime !in DOCUMENT_MIME_TYPES) throw AttachmentPolicyException(unsupportedType(name))
                     if (attachment.data.size > MAXIMUM_FILE_BYTES) {
-                        throw AttachmentPolicyException(itemTooLarge(name, 25))
+                        throw AttachmentPolicyException(itemTooLarge(name, 100))
                     }
                 }
             }

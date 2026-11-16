@@ -28,6 +28,10 @@ sourceSets.test {
     resources.srcDir("src/test/resources")
 }
 
+tasks.withType<ProcessResources>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
 tasks.test {
     useJUnitPlatform()
 }
