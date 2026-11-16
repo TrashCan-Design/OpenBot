@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BOT_HTML_CSP, mcpAppCsp } from "./csp.ts";
-import { botHtmlDocument, buildSrcdoc, CSP_META_PREFIX, mcpAppDocument, stripDocumentPreamble } from "./document.ts";
+import { botHtmlDocument, buildSrcdoc, CSP_META_PREFIX, mcpAppDocument, ROOM_APP_CAN, stripDocumentPreamble } from "./document.ts";
 import { APP_HELPER_SOURCE, APP_THEME_STYLE } from "./helper.ts";
 import { APP_POINT_SOURCE } from "./point.ts";
 
@@ -74,5 +74,11 @@ describe("documents", () => {
     expect(doc.csp).toBe(mcpAppCsp(network));
     expect(doc.srcdoc).toBe(`${CSP_META_PREFIX}${mcpAppCsp(network)}"><html><body>app</body></html>`);
     expect(doc).toMatchObject({ tool: { name: "create_view" }, toolInput: { a: 1 }, network });
+  });
+
+  it("blocks room message injection with ROOM_APP_CAN", () => {
+    expect(ROOM_APP_CAN).toEqual({ serverTools: false, serverResources: false, message: false, openLinks: true, modelContext: false });
+    const doc = botHtmlDocument({ messageId: "m3", rev: 0, html: "<p>room</p>", can: ROOM_APP_CAN });
+    expect(doc.can).toEqual(ROOM_APP_CAN);
   });
 });

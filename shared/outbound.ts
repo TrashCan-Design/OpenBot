@@ -29,12 +29,17 @@ const SEND_VERBS = new Set([
   "PAY",
   "PAYOUT",
   "TRANSFER",
+  "BUY",
+  "PURCHASE",
+  "DIAL",
 ]);
 
 /** Creating one of these is sending it: a created comment is a comment
  * someone reads, a created invoice is one someone receives. */
 const CREATE_VERBS = new Set(["CREATE", "CREATION", "ADD", "NEW"]);
-const SENT_NOUNS = new Set(["MESSAGE", "COMMENT", "POST", "EMAIL", "MAIL", "INVOICE", "PAYMENT", "REFUND", "REPLY", "TWEET", "DM"]);
+const SENT_NOUNS = new Set(["MESSAGE", "COMMENT", "POST", "EMAIL", "MAIL", "INVOICE", "PAYMENT", "REFUND", "REPLY", "TWEET", "DM", "CALL"]);
+
+const RAW_API_ACTION = /^mcp__.+__invoke_api_endpoint$/;
 
 /** A read verb first means the rest of the name is what is being read:
  * REDDIT_GET_POST fetches a post, it does not post. */
@@ -87,7 +92,7 @@ const AGENTS_X_READS = /^(?:mcp__agents__|agents__|agents_)?x_(?:search|user_pos
 export function isOutboundTool(name: string): boolean {
   // A raw API call from the workbench can do anything an app tool can, and
   // nothing here can read which; it is treated as a send.
-  if (name === "COMPOSIO_PROXY_EXECUTE") return true;
+  if (name === "COMPOSIO_PROXY_EXECUTE" || RAW_API_ACTION.test(name)) return true;
   if (AGENTS_X_READS.test(name)) return false;
   const tokens = actionTokens(name);
   if (tokens.length === 0) return false;

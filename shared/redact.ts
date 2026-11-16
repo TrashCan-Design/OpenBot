@@ -105,3 +105,7 @@ export function redactSecretsInText(text: string): string {
   return out;
 }
 
+export function redactParams<T extends Record<string, string | number>>(params: T): T {
+  return Object.fromEntries(Object.entries(params).map(([name, value]) => [name, typeof value === "string" ? redactSecretsInText(value) : value])) as T;
+}
+

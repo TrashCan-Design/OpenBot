@@ -25,6 +25,11 @@ describe("isOutboundTool", () => {
       "mcp__x__post",
       "mcp__other__x_post",
       "TWITTER_X_POST",
+      "AMAZON_BUY_ITEM",
+      "STORE_PURCHASE_PRODUCT",
+      "PHONE_DIAL_NUMBER",
+      "TELEPHONY_CREATE_CALL",
+      "mcp__telnyx__invoke_api_endpoint",
     ]) {
       expect(isOutboundTool(name), name).toBe(true);
     }

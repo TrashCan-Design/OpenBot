@@ -49,10 +49,11 @@ export function publishedBotHtml(html: string): string {
 }
 
 export const BOT_HTML_CAN: AppCan = { serverTools: false, serverResources: false, message: true, openLinks: true, modelContext: true };
+export const ROOM_APP_CAN: AppCan = { serverTools: false, serverResources: false, message: false, openLinks: true, modelContext: false };
 
 /** `format: "jsx"`: `html` is a React component file, served inside the page shell. `files`: a folder page, whose
  * other files load from that folder URL (the token route's, ending in "/"). */
-export function botHtmlDocument(input: { messageId: string; rev: number; html: string; format?: "jsx"; title?: string; files?: string }): AppDocument {
+export function botHtmlDocument(input: { messageId: string; rev: number; html: string; format?: "jsx"; title?: string; files?: string; can?: AppCan }): AppDocument {
   const html = input.format === "jsx" ? jsxPageHtml({ title: input.title ?? "Page", source: input.html }) : input.html;
   const csp = input.files ? folderPageCsp(input.files) : BOT_HTML_CSP;
   const network = input.files ? folderPageNetwork(input.files) : BOT_HTML_NETWORK;
@@ -63,7 +64,7 @@ export function botHtmlDocument(input: { messageId: string; rev: number; html: s
     srcdoc: buildSrcdoc({ html, csp, botHelper: true, ...(input.files ? { base: input.files } : {}) }),
     csp,
     network: { connect: [...network.connect], resources: [...network.resources] },
-    can: { ...BOT_HTML_CAN },
+    can: { ...(input.can ?? BOT_HTML_CAN) },
   };
 }
 

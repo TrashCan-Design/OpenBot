@@ -19,13 +19,24 @@ describe("the box's environment allow-list", () => {
     ]);
   });
 
-  it("a denied name loses even against an allowing prefix, and the never-list beats everything", () => {
-    expect(boxEnvironmentAllows("OMB_COMPOSIO_BROKER_TOKEN")).toBe(true);
-    expect(boxEnvironmentAllows("OMB_COMPOSIO_BROKER_TOKEN", new Set(["OMB_COMPOSIO_BROKER_TOKEN"]))).toBe(false);
+  it("a denied name loses even against an allowing list or prefix, and the never-list beats everything", () => {
+    expect(boxEnvironmentAllows("OMB_COMMS_TOKEN")).toBe(true);
+    expect(boxEnvironmentAllows("OMB_COMMS_TOKEN", new Set(["OMB_COMMS_TOKEN"]))).toBe(false);
+    expect(boxEnvironmentAllows("ANTHROPIC_API_KEY", new Set(["ANTHROPIC_API_KEY"]))).toBe(false);
+    expect(boxEnvironmentAllows("OMB_COMPOSIO_BROKER_TOKEN")).toBe(false);
     for (const name of BOX_ENV_NEVER) expect(boxEnvironmentAllows(name), name).toBe(false);
     expect(boxEnvironmentAllows("OMB_CLOUD_ANYTHING")).toBe(false);
-    expect(boxEnvironmentAllows("OMB_CLOUDFLARED_PATH")).toBe(true);
+    expect(boxEnvironmentAllows("OMB_CLOUDFLARED_PATH")).toBe(false);
     expect(BOX_ENV_NAMES.has("PATH")).toBe(true);
+  });
+
+  it("passes only the OMB_ names a boxed process reads; an operator's own settings stay on the server", () => {
+    const kept = boxEnvironment({
+      OMB_SIGNIN_SMTP_URL: "smtp://user:pass@mail.example.com", OMB_SIGNIN_EMAILS: "a@example.com", OMB_PHONE_SECRET_PUBLIC_KEY: "k",
+      OMB_TEST_INTERNAL_CAPABILITY_KEY: "k", OMB_PUBLIC_URL: "https://x", OMB_SOMETHING_NEW: "x", OMB_EXTRA_PATH: "/opt/tools/bin",
+      OMB_MCP_TOKEN_BROWSER: "t", OMB_GATE_CONFIG_ab12: "{}", OMB_REMOTE_MCP_CONFIG_cd34: "{}", OMB_HARNESS_URL: "http://127.0.0.1:8799",
+    });
+    expect(Object.keys(kept).sort()).toEqual(["OMB_EXTRA_PATH", "OMB_GATE_CONFIG_ab12", "OMB_HARNESS_URL", "OMB_MCP_TOKEN_BROWSER", "OMB_REMOTE_MCP_CONFIG_cd34"]);
   });
 
   it("keeps what Antigravity's runtime is started with: its harness, its file storage switch and the browser hook", () => {
