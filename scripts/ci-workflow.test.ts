@@ -49,8 +49,8 @@ describe("CI concurrency", () => {
     );
   });
 
-  it("runs the full lane every night", () => {
-    expect(workflow.on.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \d+ \* \* \*$/) }]);
+  it("does not run the full lane on a schedule", () => {
+    expect(workflow.on?.schedule).toBeUndefined();
   });
 
   it("stops a closed PR's run by joining ci.yml's PR group", () => {

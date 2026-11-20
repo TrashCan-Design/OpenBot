@@ -20,10 +20,6 @@ on:
   # setting, which GitHub offers only once an organization owns the
   # repository (docs/ci.md); this trigger is what lets CI report on those runs.
   merge_group:
-  # The full lane every night on main's newest commit: every platform's shards
-  # and smokes, which pushes to main and merge groups leave out (docs/ci.md).
-  schedule:
-    - cron: "17 21 * * *"
 
 # least privilege: CI only reads the checkout, it never writes back
 permissions:
