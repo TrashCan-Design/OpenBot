@@ -49,6 +49,8 @@ describe("splitReplyBlocks", () => {
   it("never counts pipes inside a code fence, and needs a delimiter row under the first line", () => {
     const fenced = "```md\n| a | b |\n|---|---|\n```";
     expect(splitReplyBlocks(fenced)).toEqual([{ kind: "prose", text: fenced }]);
+    const multiFence = "````markdown\n```\n| a | b |\n|---|---|\n```\n````";
+    expect(splitReplyBlocks(multiFence)).toEqual([{ kind: "prose", text: multiFence }]);
     expect(splitReplyBlocks("| just | pipes |\nno delimiter")).toEqual([{ kind: "prose", text: "| just | pipes |\nno delimiter" }]);
   });
 });

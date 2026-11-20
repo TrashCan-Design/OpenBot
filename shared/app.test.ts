@@ -63,6 +63,7 @@ describe("fallback text", () => {
     const html = "<html><head><title>T</title><style>p{color:red}</style><script>var secret = 1;</script></head>" +
       "<body><!-- note --><h1>Revenue</h1><p>Up&nbsp;12% &amp; rising &lt;fast&gt; &#8364;5 &#x1F600;</p></body></html>";
     expect(htmlFallbackText("Sales", html)).toBe("[App] Sales\nRevenue Up 12% & rising <fast> €5 😀");
+    expect(htmlVisibleText("&#xD800; &#55296; &#xDFFF; &#57343; &#xD7FF; &#xE000;")).toBe("&#xD800; &#55296; &#xDFFF; &#57343; \uD7FF \uE000");
     const long = htmlFallbackText("Long", `<p>${"word ".repeat(400)}</p>`);
     expect(long.split("\n")[1]!.length).toBeLessThanOrEqual(APP_LIMITS.fallbackExcerpt);
     expect(long.endsWith("…")).toBe(true);
