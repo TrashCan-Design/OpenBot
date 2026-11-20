@@ -68,9 +68,13 @@ export function isExpired(entry: Pick<MemoryEntryLine, "until" | "struck">, toda
 }
 
 export function withoutExpired(text: string, today: string): { text: string; hidden: number } {
-  const expired = new Set(parseMemoryEntries(text).filter((e) => isExpired(e, today)).map((e) => e.line));
-  if (!expired.size) return { text, hidden: 0 };
-  return { text: text.split("\n").filter((_, index) => !expired.has(index)).join("\n"), hidden: expired.size };
+  const expired = parseMemoryEntries(text).filter((e) => isExpired(e, today));
+  if (!expired.length) return { text, hidden: 0 };
+  const drop = new Set<number>();
+  for (const entry of expired) {
+    for (let line = entry.line; line < entry.end; line += 1) drop.add(line);
+  }
+  return { text: text.split("\n").filter((_, index) => !drop.has(index)).join("\n"), hidden: expired.length };
 }
 
 /** Deliberately narrow: `-10` and `10`, `C++` and `C`, `API_KEY` and `api_key` stay different facts. */
@@ -91,7 +95,11 @@ export function lineFactIdentity(line: string): string {
 }
 
 export function notebookIdentities(text: string): Set<string> {
-  return new Set(text.split("\n").map(lineFactIdentity).filter(Boolean));
+  const continuation = new Set<number>();
+  for (const entry of parseMemoryEntries(text)) {
+    for (let line = entry.line + 1; line < entry.end; line += 1) continuation.add(line);
+  }
+  return new Set(text.split("\n").filter((_, index) => !continuation.has(index)).map(lineFactIdentity).filter(Boolean));
 }
 
 export function withoutSuperseded(text: string): string {

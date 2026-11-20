@@ -126,6 +126,30 @@ describe("tidy plan", () => {
     expect(archived).toEqual(["- 2026-09-01 · Exams this weekend · until 2026-09-07 · expired 2026-09-25"]);
   });
 
+  it("preserves multi-line continuations when archiving expired entries and removing duplicates", () => {
+    const text = [
+      "- 2026-09-01 · Deploy command · until 2026-09-07",
+      "  ```sh",
+      "  railway up",
+      "  ```",
+      "- 2026-09-02 · Likes tea",
+      "- 2026-09-03 · Older duplicate:",
+      "  - details here",
+      "- 2026-09-04 · Older duplicate:",
+      "  - details here",
+    ].join("\n");
+    const plan = planTidy(text, TODAY);
+    const { text: remaining, archived } = applyTidy(text, plan, TODAY);
+    expect(remaining).not.toContain("Deploy command");
+    expect(remaining).not.toContain("railway up");
+    expect(remaining).toContain("- 2026-09-02 · Likes tea");
+    expect(remaining).toContain("- 2026-09-04 · Older duplicate:\n  - details here");
+    expect(remaining).not.toContain("2026-09-03");
+    expect(archived).toEqual([
+      "- 2026-09-01 · Deploy command · until 2026-09-07 · expired 2026-09-25\n  ```sh\n  railway up\n  ```",
+    ]);
+  });
+
   it("changes no contradiction at all below five entries, and at most a fifth above", () => {
     expect(contradictionBudget(1)).toBe(0);
     expect(contradictionBudget(4)).toBe(0);
@@ -155,6 +179,24 @@ describe("tidy plan", () => {
     const next = applyTidy(text, planTidy(text, TODAY, pairs), TODAY).text.split("\n");
     expect(next[0]).toBe("- 2026-09-01 · ~~Lives in Pune and prefers short replies~~ · superseded 2026-09-25");
     expect(next[1]).toBe("- 2026-09-25 · from tidy-up · Prefers short replies");
+  });
+
+  it("preserves multi-line continuations under superseded entry with remainder", () => {
+    const text = [
+      "- 2026-09-01 · Office info and prefers tea:",
+      "  - floor 3",
+      "  - room 302",
+      "- 2026-09-02 · Likes tea",
+      "- 2026-09-03 · Has a dog",
+      "- 2026-09-04 · Drives a Honda",
+      "- 2026-09-10 · Office moved to Mumbai",
+    ].join("\n");
+    const pairs = parseContradictions('{"pairs":[{"a":0,"b":4,"keep":"b","remainder":"Prefers tea"}]}', 5);
+    const next = applyTidy(text, planTidy(text, TODAY, pairs), TODAY).text.split("\n");
+    expect(next[0]).toBe("- 2026-09-01 · ~~Office info and prefers tea:~~ · superseded 2026-09-25");
+    expect(next[1]).toBe("  - floor 3");
+    expect(next[2]).toBe("  - room 302");
+    expect(next[3]).toBe("- 2026-09-25 · from tidy-up · Prefers tea");
   });
 
   it("ignores malformed or out-of-range contradiction answers", () => {
@@ -204,6 +246,14 @@ describe("organizing MEMORY.md", () => {
     const { text: left, byTopic } = applyMoves(text, parseMoves('{"moves":[{"i":0,"topic":"x","aliases":["q"]}]}', candidates)!);
     expect(left).toBe("- 2026-09-26 · A\n- 2026-09-20 · Trip · until 2026-09-21\n");
     expect(byTopic.get("x.md")).toEqual({ lines: ["- 2026-09-26 · B"], aliases: ["q"] });
+    const multiText = "- 2026-09-26 · A\n- 2026-09-26 · Deploy command:\n  ```sh\n  railway up\n  ```\n- 2026-09-20 · Trip · until 2026-09-21\n";
+    const multiCandidates = organizeCandidates(multiText, TODAY, new Set(["A"]));
+    const { text: multiLeft, byTopic: multiByTopic } = applyMoves(multiText, parseMoves('{"moves":[{"i":0,"topic":"deploy","aliases":["cloud"]}]}', multiCandidates)!);
+    expect(multiLeft).toBe("- 2026-09-26 · A\n- 2026-09-20 · Trip · until 2026-09-21\n");
+    expect(multiByTopic.get("deploy.md")).toEqual({
+      lines: ["- 2026-09-26 · Deploy command:\n  ```sh\n  railway up\n  ```"],
+      aliases: ["cloud"],
+    });
   });
 });
 
@@ -521,6 +571,31 @@ describe("the upkeep loop", () => {
     const report = await upkeep().capture({ botId: BOT.id, threadId: "t1", turns: [{ person: "hi", bot: "hello" }] });
     expect(report.organized).toBe(1);
     expect(readMemoryTopic(BOT.id, "acme.md")).toContain("The client Acme wants logo revisions.");
+  });
+
+  it("organizes multi-line entries into topic files preserving code fences and bullets", async () => {
+    ensureWorkspace(BOT.id);
+    writeMemoryFile(
+      BOT.id,
+      [
+        "- 2026-09-26 · The user is allergic to gluten.",
+        "- 2026-09-26 · Deploy command for Acme:",
+        "  ```sh",
+        "  railway up",
+        "  ```",
+        "- 2026-09-26 · Acme contacts:",
+        "  - Alice: engineering lead",
+        "  - Bob: product manager",
+        "",
+      ].join("\n"),
+    );
+    organizeAnswer = '{"moves":[{"i":0,"topic":"acme","aliases":["client"]},{"i":1,"topic":"acme"}]}';
+    const report = await upkeep().tidy(BOT.id);
+    expect(report.organized).toBe(2);
+    expect(memory()).toBe("- 2026-09-26 · The user is allergic to gluten.\n");
+    const acme = readMemoryTopic(BOT.id, "acme.md")!;
+    expect(acme).toContain("- 2026-09-26 · Deploy command for Acme:\n  ```sh\n  railway up\n  ```");
+    expect(acme).toContain("- 2026-09-26 · Acme contacts:\n  - Alice: engineering lead\n  - Bob: product manager");
   });
 
   it("retries organization after malformed output instead of remembering every entry as core", async () => {

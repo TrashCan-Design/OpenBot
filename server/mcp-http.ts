@@ -82,6 +82,10 @@ function unwrap(message: JsonRpcMessage): unknown {
   return message.result;
 }
 
+export function isResponse(message: unknown): boolean {
+  return isRecord(message) && typeof message.method !== "string" && (message.result !== undefined || message.error !== undefined);
+}
+
 function parseMessage(text: string): JsonRpcMessage | JsonRpcMessage[] | null {
   try {
     const parsed: unknown = JSON.parse(text);
@@ -245,6 +249,7 @@ export class RemoteMcpClient {
     if (this.closed) return;
     this.closed = true;
     this.sseAbort.abort();
+    this.sseEndpoint = null;
     for (const entry of this.pending.values()) entry.reject(new McpHttpError("network", "client closed"));
     this.pending.clear();
     // Streamable HTTP: end the session. Many servers answer 405 here.
@@ -293,7 +298,7 @@ export class RemoteMcpClient {
     if (type.startsWith("application/json")) {
       const parsed = parseMessage(await readBounded(response, this.maxBytes));
       this.deliverNotifications(parsed);
-      const message = (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).find((entry) => entry.id === id);
+      const message = (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).find((entry) => isResponse(entry) && entry.id === id);
       if (!message) throw new McpHttpError("protocol", "response did not answer the request");
       return unwrap(message);
     }
@@ -303,7 +308,7 @@ export class RemoteMcpClient {
         if (event.event !== "message") return undefined;
         const parsed = parseMessage(event.data);
         this.deliverNotifications(parsed);
-        const message = (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).find((entry) => entry.id === id);
+        const message = (Array.isArray(parsed) ? parsed : parsed ? [parsed] : []).find((entry) => isResponse(entry) && entry.id === id);
         if (!message) return undefined;
         found = message;
         return "stop";
@@ -320,32 +325,63 @@ export class RemoteMcpClient {
     if (this.sseEndpoint) return this.sseEndpoint;
     this.sseEndpoint = new Promise<string>((resolveEndpoint, rejectEndpoint) => {
       let settled = false;
+      const streamAbort = new AbortController();
+      const onClientClose = () => streamAbort.abort();
+
+      const cleanup = () => {
+        signal.removeEventListener("abort", onOpeningAbort);
+        this.sseAbort.signal.removeEventListener("abort", onClientClose);
+      };
+
       const fail = (error: Error) => {
+        this.sseEndpoint = null;
         if (!settled) {
           settled = true;
+          cleanup();
           rejectEndpoint(error);
         }
         for (const entry of this.pending.values()) entry.reject(error);
         this.pending.clear();
       };
+
+      const onOpeningAbort = () => {
+        if (!settled) {
+          streamAbort.abort();
+          fail(new McpHttpError("network", "aborted"));
+        }
+      };
+
+      if (this.sseAbort.signal.aborted) {
+        fail(new McpHttpError("network", "client closed"));
+        return;
+      }
+      if (signal.aborted) {
+        fail(new McpHttpError("network", "aborted"));
+        return;
+      }
+
+      this.sseAbort.signal.addEventListener("abort", onClientClose, { once: true });
+      signal.addEventListener("abort", onOpeningAbort, { once: true });
+
       const headers = this.headers();
       headers.set("accept", "text/event-stream");
-      // The caller's signal covers only the opening: later requests are answered on this stream.
-      const opening = AbortSignal.any([signal, this.sseAbort.signal]);
-      this.fetchImpl(this.target.url, { method: "GET", headers, signal: opening })
+      this.fetchImpl(this.target.url, { method: "GET", headers, signal: streamAbort.signal })
         .then(async (response) => {
           if (!response.ok) {
             drain(response);
             throw new McpHttpError("status", `HTTP ${response.status}`, response.status, response.headers.get("www-authenticate") ?? undefined);
           }
-          await readSse(response, this.sseAbort.signal, (event) => {
+          await readSse(response, streamAbort.signal, (event) => {
             if (event.event === "endpoint") {
               if (!settled) {
-                settled = true;
                 try {
-                  resolveEndpoint(new URL(event.data, this.target.url).toString());
+                  const endpoint = new URL(event.data, this.target.url).toString();
+                  settled = true;
+                  signal.removeEventListener("abort", onOpeningAbort);
+                  resolveEndpoint(endpoint);
                 } catch {
-                  rejectEndpoint(new McpHttpError("protocol", "invalid endpoint event"));
+                  streamAbort.abort();
+                  fail(new McpHttpError("protocol", "invalid endpoint event"));
                 }
               }
               return undefined;
@@ -354,6 +390,7 @@ export class RemoteMcpClient {
             const parsed = parseMessage(event.data);
             this.deliverNotifications(parsed);
             for (const message of Array.isArray(parsed) ? parsed : parsed ? [parsed] : []) {
+              if (!isResponse(message)) continue;
               const entry = typeof message.id === "number" ? this.pending.get(message.id) : undefined;
               if (!entry) continue;
               this.pending.delete(message.id as number);
@@ -369,6 +406,9 @@ export class RemoteMcpClient {
         })
         .catch((error: unknown) => {
           fail(error instanceof McpHttpError ? error : new McpHttpError("network", "event stream failed"));
+        })
+        .finally(() => {
+          cleanup();
         });
     });
     return this.sseEndpoint;

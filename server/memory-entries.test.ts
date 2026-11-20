@@ -48,6 +48,11 @@ describe("memory entry grammar", () => {
     expect(isExpired({ until: null, struck: false }, "2099-01-01")).toBe(false);
     const hidden = withoutExpired("- 2026-09-10 · Exams this weekend · until 2026-09-14\n- 2026-09-10 · Likes tea\n", "2026-09-15");
     expect(hidden).toEqual({ text: "- 2026-09-10 · Likes tea\n", hidden: 1 });
+    const multiExpired = withoutExpired(
+      "- 2026-09-10 · Deploy command · until 2026-09-14\n  ```sh\n  railway up\n  ```\n- 2026-09-10 · Likes tea\n",
+      "2026-09-15",
+    );
+    expect(multiExpired).toEqual({ text: "- 2026-09-10 · Likes tea\n", hidden: 1 });
   });
 
   it("accepts only real calendar dates", () => {
@@ -81,6 +86,12 @@ describe("fact identity keeps meaning", () => {
     expect(ids.has("Likes tea")).toBe(true);
     expect(ids.has("Lives in Pune")).toBe(false);
     expect(lineFactIdentity("- 2026-09-10 · Balance is -10")).toBe("Balance is -10");
+    const multi = "- 2026-09-10 · Deploy command:\n  ```sh\n  railway up\n  ```\n- 2026-09-10 · Likes tea\n";
+    const multiIds = notebookIdentities(multi);
+    expect(multiIds.has("Deploy command:")).toBe(true);
+    expect(multiIds.has("Likes tea")).toBe(true);
+    expect(multiIds.has("railway up")).toBe(false);
+    expect(multiIds.has("```sh")).toBe(false);
   });
 });
 

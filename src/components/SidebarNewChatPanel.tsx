@@ -105,7 +105,7 @@ export function SidebarNewChatPanel({
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.nativeEvent?.isComposing) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setCursor(selected < 0 ? 0 : (selected + 1) % count);

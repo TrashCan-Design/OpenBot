@@ -38,7 +38,7 @@ export function pollConnector(
       if (!result) return;
       stop();
       onEnd(result);
-    });
+    }).catch(() => undefined);
   }, CONNECTOR_POLL_MS);
   return stop;
 }
