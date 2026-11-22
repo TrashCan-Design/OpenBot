@@ -81,7 +81,7 @@ function socketError(socket: Duplex, status: number, message: string): void {
   if (socket.destroyed) return;
   const body = JSON.stringify({ error: message });
   socket.end(
-    `HTTP/1.1 ${status} ${status === 401 ? "Unauthorized" : status === 403 ? "Forbidden" : "Not Found"}\r\n`
+    `HTTP/1.1 ${status} ${status === 401 ? "Unauthorized" : status === 403 ? "Forbidden" : status === 502 ? "Bad Gateway" : "Not Found"}\r\n`
       + "Connection: close\r\n"
       + "Content-Type: application/json\r\n"
       + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
@@ -317,12 +317,20 @@ export class CompanionViewerRelay {
     const keep = (chunk: Buffer) => early.push(chunk);
     const hangUp = () => socket.destroy();
     socket.on("data", keep).once("end", hangUp);
-    void session.leaseHolds().then((owned) => {
+    const fail = () => {
       socket.off("data", keep).off("end", hangUp).pause();
-      if (owned && this.#isActive(session) && !socket.destroyed) return this.#pipe(resolved, socket, Buffer.concat(early), headers);
-      if (!owned && this.#isActive(session)) this.#remove(session);
-      socketError(socket, 404, "viewer session not found");
-    });
+      if (!socket.destroyed) socketError(socket, 502, "viewer lease check failed");
+    };
+    try {
+      void session.leaseHolds().then((owned) => {
+        socket.off("data", keep).off("end", hangUp).pause();
+        if (owned && this.#isActive(session) && !socket.destroyed) return this.#pipe(resolved, socket, Buffer.concat(early), headers);
+        if (!owned && this.#isActive(session)) this.#remove(session);
+        socketError(socket, 404, "viewer session not found");
+      }).catch(fail);
+    } catch {
+      fail();
+    }
   }
 
   #pipe(resolved: { session: ViewerSession; target: URL }, socket: Duplex, head: Buffer, headers: Record<string, string>): void {

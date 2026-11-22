@@ -217,7 +217,7 @@ describe("deleting one browser session's saved logins", () => {
       expect(env).not.toHaveProperty("AGENT_BROWSER_NO_WEBMCP");
       expect(env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
       expect(env?.AGENT_BROWSER_SOCKET_DIR).toBe("/fixture/sockets");
-      expect(env?.AGENT_BROWSER_CONFIG).toBe(join(home, ".agent-browser", "omb-managed-config.json"));
+      expect(env?.AGENT_BROWSER_CONFIG).toBe(join(home, ".agent-browser", "openbot-managed-config.json"));
       expect(readFileSync(env!.AGENT_BROWSER_CONFIG!, "utf8")).toBe("{}\n");
     }
   });
@@ -599,6 +599,15 @@ describe("restoring exactly one browser profile", () => {
     expect(readFileSync(path, "utf8")).toBe('{"profile":"/fixture/shared"}');
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it("does not overwrite an unexpected openbot managed config or start a browser with it", async () => {
+    const { directory, options } = fixture();
+    const path = join(directory, "..", "openbot-managed-config.json");
+    writeFileSync(path, '{"profile":"/fixture/shared"}');
+    await expect(prepareBrowserSessionState("fixture-browser", "work", options)).rejects.toThrow(/configuration was changed/);
+    expect(readFileSync(path, "utf8")).toBe('{"profile":"/fixture/shared"}');
+    expect(spawn).not.toHaveBeenCalled();
+  });
 });
 
 describe("finding the browser engine", () => {
@@ -939,7 +948,7 @@ describe("what a bot gets", () => {
     expect(spec.env).toEqual({
       AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_NO_WEBMCP: "1", AGENT_BROWSER_RESTORE: browserRestoreKey("bot-1"),
       AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_ENCRYPTION_KEY: "session-key",
-      AGENT_BROWSER_CONFIG: expect.stringContaining("omb-managed-config.json"),
+      AGENT_BROWSER_CONFIG: expect.stringContaining("openbot-managed-config.json"),
       AGENT_BROWSER_HEADLESS: "1", AGENT_BROWSER_HEADED: "0", PATH: "/usr/bin",
       AGENT_BROWSER_EXECUTABLE_PATH: "/opt/trusted chrome/chrome", ...keptNoGate("bot-1"),
     });
@@ -953,7 +962,7 @@ describe("what a bot gets", () => {
     expect(spec.env).toEqual({
       AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_NO_WEBMCP: "1", AGENT_BROWSER_RESTORE: browserRestoreKey("bot-1"),
       AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_ENCRYPTION_KEY: "session-key",
-      AGENT_BROWSER_CONFIG: expect.stringContaining("omb-managed-config.json"),
+      AGENT_BROWSER_CONFIG: expect.stringContaining("openbot-managed-config.json"),
       AGENT_BROWSER_HEADLESS: "1", AGENT_BROWSER_HEADED: "0", PATH: "/usr/bin",
       AGENT_BROWSER_EXECUTABLE_PATH: "/opt/process-chrome/chrome", ...keptNoGate("bot-1"),
     });

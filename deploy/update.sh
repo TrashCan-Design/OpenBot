@@ -37,20 +37,20 @@ trap '' HUP PIPE
 
 REPO="ghcr.io/TrashCan-Design/openbot"
 PINNED="^ghcr\.io/TrashCan-Design/openbot@sha256:[0-9a-f]{64}$"
-STABLE_URL=${OMB_STABLE_URL:-https://raw.githubusercontent.com/TrashCan-Design/OpenBot/channels/stable.json}
-NEWEST_URL=${OMB_NEWEST_URL:-https://api.github.com/repos/TrashCan-Design/OpenBot/releases/latest}
-SERVICE=${OMB_UPDATE_SERVICE:-omb}
+STABLE_URL=${OPENBOT_STABLE_URL:-${OMB_STABLE_URL:-https://raw.githubusercontent.com/TrashCan-Design/OpenBot/channels/stable.json}}
+NEWEST_URL=${OPENBOT_NEWEST_URL:-${OMB_NEWEST_URL:-https://api.github.com/repos/TrashCan-Design/OpenBot/releases/latest}}
+SERVICE=${OPENBOT_UPDATE_SERVICE:-${OMB_UPDATE_SERVICE:-}}
 # A healthy server answers within seconds of starting; two minutes leaves room for a slow first start after an update,
-# and is how long the server is down before a version that never answers is rolled back. OMB_UPDATE_WAIT_S for more.
-WAIT_S=${OMB_UPDATE_WAIT_S:-120}
-ENGINE_WAIT_S=${OMB_UPDATE_ENGINE_WAIT_S:-120}
-POLL_S=${OMB_UPDATE_POLL_S:-5}
+# and is how long the server is down before a version that never answers is rolled back. OPENBOT_UPDATE_WAIT_S / OMB_UPDATE_WAIT_S for more.
+WAIT_S=${OPENBOT_UPDATE_WAIT_S:-${OMB_UPDATE_WAIT_S:-120}}
+ENGINE_WAIT_S=${OPENBOT_UPDATE_ENGINE_WAIT_S:-${OPENBOT_ENGINE_WAIT_S:-${OMB_UPDATE_ENGINE_WAIT_S:-${OMB_ENGINE_WAIT_S:-120}}}}
+POLL_S=${OPENBOT_UPDATE_POLL_S:-${OMB_UPDATE_POLL_S:-5}}
 KEEP_TAG="openbot-before-update:local"
 BACKUP_ROLE="com.openbot.role=update-backup"
 
 # The install: --dir, else the folder this script is in when that holds a Compose file, else where the installer
 # (deploy/install.sh) puts one.
-DIR=${OMB_INSTALL_DIR:-}
+DIR=${OPENBOT_INSTALL_DIR:-${OMB_INSTALL_DIR:-}}
 want_dir=no
 for arg in "$@"; do
   if [ "$want_dir" = yes ]; then DIR=$arg; want_dir=no; elif [ "$arg" = --dir ]; then want_dir=yes; fi
@@ -65,8 +65,17 @@ LAST="$STATE/last"
 LOCK="$STATE/lock"
 LOG="$STATE/update.log"
 cd "$DIR" 2>/dev/null || { printf '%s\n' "There is no folder $DIR."; exit 4; }
+if [ -z "$SERVICE" ]; then
+  if grep -qE '^[[:space:]]*openbot:' docker-compose.yml compose.yaml 2>/dev/null; then
+    SERVICE=openbot
+  elif grep -qE '^[[:space:]]*omb:' docker-compose.yml compose.yaml 2>/dev/null; then
+    SERVICE=omb
+  else
+    SERVICE=openbot
+  fi
+fi
 # The pin is read from .env, never from the shell that happens to run this.
-unset OMB_IMAGE
+unset OPENBOT_IMAGE OMB_IMAGE
 
 # A step interrupted while its output goes to the log still speaks to the terminal.
 exec 3>&1
@@ -202,7 +211,7 @@ take_lock() {
     printf '%s\n' "$DIR cannot be written by this user, so the update could not keep its journal or change .env. Nothing was changed. Run it as the user who owns $DIR, or with sudo."
     exit 4
   fi
-  if ! mkdir "$LOCK" 2>/dev/null; then
+  if [ -d "$LOCK" ]; then
     local other
     other=$(cat "$LOCK/pid" 2>/dev/null || true)
     if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
@@ -210,10 +219,20 @@ take_lock() {
       exit 3
     fi
     rm -rf "$LOCK"
-    mkdir "$LOCK" 2>/dev/null || { printf '%s\n' "Another update took the lock in $LOCK just now. Wait for it to finish."; exit 3; }
   fi
-  echo $$ >"$LOCK/pid"
-  trap 'rm -rf "$LOCK"' EXIT
+  exec 9>>"$LOCK"
+  if ! flock -n 9; then
+    local other
+    other=$(cat "$LOCK" 2>/dev/null || true)
+    if [ -n "$other" ]; then
+      printf '%s\n' "An update is already running here (process $other). Wait for it to finish."
+    else
+      printf '%s\n' "Another update took the lock in $LOCK just now. Wait for it to finish."
+    fi
+    exit 3
+  fi
+  echo $$ >"$LOCK"
+  trap 'rm -f "$LOCK"' EXIT
 }
 
 # Helpers run in a short-lived container from the server's own image, as root and without a network.
@@ -288,16 +307,18 @@ room_for_copy() { # data backup image → 0 when there is room where the copy go
 pin_previous() {
   local named
   case "$J_previous" in "$REPO@sha256:"*) ;; *) return 0 ;; esac
-  named=$(sed -n 's/^OMB_IMAGE=//p' .env 2>/dev/null | tail -n 1)
+  named=$(sed -n -E 's/^(OPENBOT_IMAGE|OMB_IMAGE)=//p' .env 2>/dev/null | tail -n 1)
   case "$named" in
     *@sha256:* | *:v[0-9]*.[0-9]*.[0-9]*) return 0 ;;
   esac
   pin_image "$J_previous"
 }
-pin_image() { # writes OMB_IMAGE=<ref> into .env, keeping every other line and the file's mode
+pin_image() { # writes OPENBOT_IMAGE=<ref> (or OMB_IMAGE=<ref> when present) into .env, keeping other lines and mode
   local tmp="$DIR/.env.update.tmp"
-  if [ -f .env ]; then cp -p .env "$tmp" && grep -v '^OMB_IMAGE=' .env >"$tmp"; else : >"$tmp" && chmod 600 "$tmp"; fi
-  printf 'OMB_IMAGE=%s\n' "$1" >>"$tmp" && mv "$tmp" .env
+  local var="OPENBOT_IMAGE"
+  if [ -f .env ] && grep -q '^OMB_IMAGE=' .env && ! grep -q '^OPENBOT_IMAGE=' .env; then var="OMB_IMAGE"; fi
+  if [ -f .env ]; then cp -p .env "$tmp" && grep -v -E '^(OPENBOT_IMAGE|OMB_IMAGE)=' .env >"$tmp"; else : >"$tmp" && chmod 600 "$tmp"; fi
+  printf '%s=%s\n' "$var" "$1" >>"$tmp" && mv "$tmp" .env
 }
 keep_env() {
   rm -f "$STATE/env.before" "$STATE/env.absent" "$STATE/compose.yaml.before" "$STATE/Caddyfile.before"
@@ -320,7 +341,7 @@ restore_env() {
 INSTALLER_MARK="# Written by OpenBot's installer (deploy/install.sh)"
 old_installer_layout() { [ -f compose.yaml ] && grep -qF "$INSTALLER_MARK" compose.yaml && grep -q '^ *network_mode: "service:omb"' compose.yaml; }
 # A Compose file of this repository's (path B) with Caddy in the server's network: `git pull` brings the current one.
-old_repository_layout() { [ -f docker-compose.yml ] && grep -q '^ *network_mode: "service:omb"' docker-compose.yml; }
+old_repository_layout() { [ -f docker-compose.yml ] && grep -qE '^ *network_mode: "service:(omb|openbot)"' docker-compose.yml; }
 move_installer_layout() {
   cp -p compose.yaml "$STATE/compose.yaml.before" && cp -p Caddyfile "$STATE/Caddyfile.before" || return 1
   installer_compose >compose.yaml.update.tmp && mv compose.yaml.update.tmp compose.yaml &&
@@ -432,14 +453,14 @@ stop_server() {
   [ -z "$cid" ] || [ "$(inspect '{{.State.Running}}' "$cid")" = false ]
 }
 
-answers() { compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OMB_PORT:-8799}/api/health"' 2>/dev/null | grep -q openbot; }
+answers() { compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/api/health"' 2>/dev/null | grep -q openbot; }
 reported_version() {
-  compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OMB_PORT:-8799}/.well-known/openbot/environment"' 2>/dev/null | json_top version
+  compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/.well-known/openbot/environment"' 2>/dev/null | json_top version
 }
 # How many engines can start a bot, as the server counts them (GET /api/health/engines, which a hardened server answers
 # a local caller without a session); nothing from a version without that count.
 engine_count() {
-  compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 10 "http://127.0.0.1:${OMB_PORT:-8799}/api/health/engines"' 2>/dev/null |
+  compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 10 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/api/health/engines"' 2>/dev/null |
     sed -n 's/.*"engines":\([0-9][0-9]*\).*/\1/p' | head -n 1
 }
 # At least one engine can start a bot, within $1 seconds: the server's count, or `openbot doctor` on a version that
@@ -775,9 +796,9 @@ if [ "$ALLOW_OLDER" != yes ] && [ -n "$(older_reason)" ]; then
   say "Nothing was changed. To go ahead anyway, with the data copied first: ./update.sh --allow-older${WANT_VERSION:+ --version $WANT_VERSION}${WANT_IMAGE:+ --image $WANT_IMAGE}"
   exit 5
 fi
-if ! OMB_IMAGE="$J_target" docker compose config 2>/dev/null | grep -qF "image: $J_target"; then
+if ! OPENBOT_IMAGE="$J_target" OMB_IMAGE="$J_target" docker compose config 2>/dev/null | grep -qF "image: $J_target"; then
   abandon
-  refuse "The Compose file in $DIR does not take its image from OMB_IMAGE. Get the current one (git pull, or run the installer again), then run this again. Nothing was changed."
+  refuse "The Compose file in $DIR does not take its image from OPENBOT_IMAGE or OMB_IMAGE. Get the current one (git pull, or run the installer again), then run this again. Nothing was changed."
 fi
 BACKUP_MADE=yes
 if ! make_backup_volume "$J_backup" "$J_previous_id" || ! room_for_copy "$J_data" "$J_backup" "$J_previous_id"; then

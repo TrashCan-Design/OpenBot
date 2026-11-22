@@ -229,6 +229,38 @@ describe("VPS companion viewer relay", () => {
     expect(vm.upgrades).toHaveLength(1);
   });
 
+  it("answers 502 and cleans up the socket when its lease check rejects", async () => {
+    let unhandledRejection: unknown = null;
+    const listener = (err: unknown) => { unhandledRejection = err; };
+    process.on("unhandledRejection", listener);
+    try {
+      const rejectingPromise = new Proxy(Promise.resolve(false), {
+        get(target, prop, receiver) {
+          if (prop === "catch") return () => Promise.reject(new Error("lease check exploded"));
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const rejectingCheck: ControlCheck = (() => rejectingPromise) as unknown as ControlCheck;
+      const vm = await localVmViewer(rejectingCheck);
+      const { client, response } = await openViewer(vm.port, vm.path);
+      expect(response).toContain("502 Bad Gateway");
+      expect(response).toContain("viewer lease check failed");
+      expect(client.destroyed).toBe(true);
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("answers 502 and cleans up the socket when its lease check throws synchronously", async () => {
+    const throwingCheck: ControlCheck = (() => { throw new Error("synchronous explosion"); }) as unknown as ControlCheck;
+    const vm = await localVmViewer(throwingCheck);
+    const { client, response } = await openViewer(vm.port, vm.path);
+    expect(response).toContain("502 Bad Gateway");
+    expect(response).toContain("viewer lease check failed");
+    expect(client.destroyed).toBe(true);
+  });
+
   it("refuses a viewer ended while its lease check was on its way, even when the lease still holds", async () => {
     const answers: Array<(owned: boolean) => void> = [];
     const vm = await localVmViewer(() => new Promise((resolve) => answers.push(resolve)));

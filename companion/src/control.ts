@@ -11,7 +11,8 @@ import { lanAddresses, lanInterfaces, tailnetName, tailscaleAddress } from "./li
 import { defaultHostName } from "./mdns.ts";
 import { publicNetworks } from "./windows-network.ts";
 
-export const CONTROL_TOKEN_HEADER = "x-openmausbot-control-token";
+export const CONTROL_TOKEN_HEADER = "x-openbot-control-token";
+export const LEGACY_CONTROL_TOKEN_HEADER = "x-openmausbot-control-token";
 
 export interface ControlOptions {
   devices: DeviceRegistry;
@@ -215,7 +216,8 @@ export function createControlServer(options: ControlOptions): Server {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html) });
       return res.end(html);
     }
-    if (!tokenMatches(req.headers[CONTROL_TOKEN_HEADER], options.controlToken())) {
+    const presentedToken = req.headers[CONTROL_TOKEN_HEADER] ?? req.headers[LEGACY_CONTROL_TOKEN_HEADER];
+    if (!tokenMatches(presentedToken, options.controlToken())) {
       return json(res, 403, { error: "forbidden: open the companion's control page from the link it printed" });
     }
     if (method === "GET" && path === "/state") return json(res, 200, companionState(options));
@@ -354,7 +356,10 @@ history.replaceState(null, "", location.pathname);
 
 /** Call the control API and return the state it answers with. */
 async function api(path, method) {
-  const res = await fetch(path, { method: method ?? "GET", headers: { "x-openmausbot-control-token": token } });
+  const res = await fetch(path, {
+    method: method ?? "GET",
+    headers: { "x-openbot-control-token": token, "x-openmausbot-control-token": token },
+  });
   if (res.status === 403) {
     document.querySelector("main").innerHTML = "<h1>OpenBot Companion</h1><p class=sub>Open this page from the link the companion printed when it started.</p>";
     throw new Error("control token required");

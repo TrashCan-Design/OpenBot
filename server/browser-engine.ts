@@ -56,7 +56,11 @@ export function browserSessionsDirectory(env: NodeJS.ProcessEnv): string {
 }
 
 function managedBrowserConfigPath(env: NodeJS.ProcessEnv): string {
-  return join(browserSessionsDirectory(env), "..", "omb-managed-config.json");
+  const base = join(browserSessionsDirectory(env), "..");
+  const legacy = join(base, "omb-managed-config.json");
+  const openbot = join(base, "openbot-managed-config.json");
+  if (existsSync(legacy) && !existsSync(openbot)) return legacy;
+  return openbot;
 }
 
 function ensureManagedBrowserConfig(env: NodeJS.ProcessEnv): string {
@@ -373,7 +377,8 @@ interface BrowserLookupOptions {
 }
 
 function packagedBrowser(options: BrowserLookupOptions) {
-  const resources = (options.env ?? process.env).OMB_RESOURCES_PATH;
+  const env = options.env ?? process.env;
+  const resources = env.OPENBOT_RESOURCES_PATH ?? env.OMB_RESOURCES_PATH;
   if (!resources) return null;
   try {
     return browserBundlePaths(join(resolve(resources), "browser-engine"), `${options.platform ?? process.platform}-${options.arch ?? process.arch}`);
@@ -390,7 +395,7 @@ export function resolveAgentBrowserBinary(options: BrowserLookupOptions = {}): s
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const exists = options.exists ?? existsSync;
-  const override = env.OMB_AGENT_BROWSER_PATH?.trim();
+  const override = (env.OPENBOT_AGENT_BROWSER_PATH ?? env.OMB_AGENT_BROWSER_PATH)?.trim();
   if (override) return resolve(override) && exists(resolve(override)) ? resolve(override) : null;
   const bundle = packagedBrowser(options);
   if (bundle && exists(bundle.directory)) return completePackage(bundle, exists) ? bundle.engine : null;

@@ -177,6 +177,46 @@ describe.skipIf(!posix)("deploy/install.sh", () => {
     expect(mode(join(first.install, "data"))).toBe(0o755);
     expect(again.stdout).toContain(`  note  ${first.install} could be changed by others on this server; now only its owner can change it.`);
   });
+
+  it("supports OPENBOT_INSTALL_SOURCE ahead of OMB_INSTALL_SOURCE", () => {
+    const res = spawnSync("sh", [
+      "-c",
+      `eval "$(sed -e 's/^main /# main /' "$0")"; settings; printf '%s' "$SOURCE_ASKED"`,
+      SCRIPT,
+    ], {
+      encoding: "utf8",
+      env: {
+        OPENBOT_INSTALL_SOURCE: "https://openbot.example.com/source",
+        OMB_INSTALL_SOURCE: "https://legacy.example.com/source",
+      },
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe("https://openbot.example.com/source");
+
+    const fallback = spawnSync("sh", [
+      "-c",
+      `eval "$(sed -e 's/^main /# main /' "$0")"; settings; printf '%s' "$SOURCE_ASKED"`,
+      SCRIPT,
+    ], {
+      encoding: "utf8",
+      env: {
+        OMB_INSTALL_SOURCE: "https://legacy.example.com/source",
+      },
+    });
+    expect(fallback.status).toBe(0);
+    expect(fallback.stdout).toBe("https://legacy.example.com/source");
+
+    const unset = spawnSync("sh", [
+      "-c",
+      `eval "$(sed -e 's/^main /# main /' "$0")"; settings; printf '%s' "$SOURCE_ASKED"`,
+      SCRIPT,
+    ], {
+      encoding: "utf8",
+      env: {},
+    });
+    expect(unset.status).toBe(0);
+    expect(unset.stdout).toBe("");
+  });
 });
 
 describe.skipIf(!posix)("deploy/update.sh", () => {
@@ -195,6 +235,100 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     ], { encoding: "utf8" });
     expect(res.status).toBe(0);
     expect(res.stdout.trim()).toBe("0022");
+  });
+
+  it("acquires exclusive lock and rejects concurrent update with exit code 3", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-lock-"));
+    dirs.push(dir);
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        take_lock
+        (
+          take_lock
+        )
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(3);
+    expect(res.stdout).toMatch(/already running|took the lock/);
+  });
+
+  it("reclaims regular lock file with stale PID and overwrites with current PID", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-stale-file-"));
+    dirs.push(dir);
+    const updateDir = join(dir, ".update");
+    mkdirSync(updateDir, { recursive: true });
+    writeFileSync(join(updateDir, "lock"), "99999999\n");
+
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        take_lock
+        printf 'pid:%s' "$(cat "$LOCK")"
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/^pid:\d+$/);
+    expect(res.stdout).not.toBe("pid:99999999");
+  });
+
+  it("handles legacy directory lock and reclaims stale locks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-legacy-lock-"));
+    dirs.push(dir);
+    const lockDir = join(dir, ".update", "lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "pid"), "99999999\n");
+
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        take_lock
+        [ -f "$LOCK" ] && printf "lock-file-created"
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe("lock-file-created");
+  });
+
+  it("rejects update when legacy directory lock belongs to an active running process", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-legacy-active-"));
+    dirs.push(dir);
+    const lockDir = join(dir, ".update", "lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "pid"), `${process.pid}\n`);
+
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        take_lock
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(3);
+    expect(res.stdout).toContain(`An update is already running here (process ${process.pid}). Wait for it to finish.`);
   });
 });
 

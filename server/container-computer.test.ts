@@ -15,7 +15,13 @@ import {
   IMAGE,
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
+  imageLabelsMatch,
   MANAGED_LABEL,
+  OPENBOT_BASE_IMAGE_LABEL,
+  OPENBOT_DRIVER_LABEL,
+  OPENBOT_IMAGE_LAYER_LABEL,
+  OPENBOT_MANAGED_LABEL,
+  OPENBOT_WORKSPACE_LABEL,
   TARGET_LABEL,
   VM_WORKSPACE_DIR,
   VM_WORKSPACE_GUEST,
@@ -935,6 +941,89 @@ describe("Cua integration", () => {
     expect(frame).toEqual({ png: png.toString("base64"), format: "jpeg" });
     expect(frame.png.startsWith("data:")).toBe(false);
   });
+
+  it("shares overlapping frame captures of the same target without duplicate fetch", async () => {
+    const png = validPng;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const capturing = new Promise<void>((resolve) => { entered = resolve; });
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "degraded", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: png.toString("base64"),
+      [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
+        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+    });
+    const run: CommandRunner = async (cmd, args, timeout) => {
+      if (args.includes("get_desktop_state")) {
+        entered();
+        await gate;
+      }
+      return fake.run(cmd, args, timeout);
+    };
+
+    const first = containerComputerFrame(run, "linux");
+    await capturing;
+    const second = containerComputerFrame(run, "linux");
+    release();
+
+    const frames = await Promise.all([first, second]);
+    expect(frames[0]).toEqual(frames[1]);
+    expect(fake.calls.filter((c) => c.includes("get_desktop_state"))).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.includes(SCREENSHOT_TRANSFER))).toHaveLength(1);
+  });
+
+  it("awaits in-flight frame capture before probing desktop health via CUA driver socket", async () => {
+    const png = validPng;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const capturing = new Promise<void>((resolve) => { entered = resolve; });
+    let frameDone = false;
+    let probedAfterFrame = false;
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "degraded", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: png.toString("base64"),
+      [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
+        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+    });
+    const run: CommandRunner = async (cmd, args, timeout) => {
+      if (args.includes("get_desktop_state")) {
+        entered();
+        await gate;
+      }
+      if (args.includes("health_report")) {
+        if (frameDone) probedAfterFrame = true;
+      }
+      return fake.run(cmd, args, timeout);
+    };
+
+    const frame = containerComputerFrame(run, "linux").finally(() => { frameDone = true; });
+    await capturing;
+    const statusPromise = containerComputerStatus(run, "linux");
+    release();
+
+    await Promise.all([frame, statusPromise]);
+    expect(probedAfterFrame).toBe(true);
+  });
 });
 
 describe("containerComputerAction", () => {
@@ -980,6 +1069,57 @@ describe("containerComputerAction", () => {
     await containerComputerAction("remove", fake.run, "linux");
 
     expect(fake.calls).toContain(`docker rm -f ${CONTAINER}`);
+  });
+
+  it("removes a container created with OpenBot labels (com.openbot.*)", async () => {
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect({
+        Config: {
+          Image: IMAGE,
+          Labels: {
+            [OPENBOT_MANAGED_LABEL]: "1",
+            [OPENBOT_DRIVER_LABEL]: CUA_DRIVER_VERSION,
+            [OPENBOT_BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
+            [OPENBOT_IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+            [OPENBOT_WORKSPACE_LABEL]: "1",
+          },
+          Env: [],
+        },
+      }),
+      [`docker rm -f ${CONTAINER}`]: "",
+    });
+
+    await containerComputerAction("remove", fake.run, "linux");
+
+    expect(fake.calls).toContain(`docker rm -f ${CONTAINER}`);
+  });
+
+  it("matches image labels with OpenBot or legacy OpenMausBot keys", () => {
+    expect(imageLabelsMatch({
+      [OPENBOT_MANAGED_LABEL]: "1",
+      [OPENBOT_DRIVER_LABEL]: CUA_DRIVER_VERSION,
+      [OPENBOT_BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
+      [OPENBOT_IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+    })).toBe(true);
+
+    expect(imageLabelsMatch({
+      [MANAGED_LABEL]: "1",
+      [DRIVER_LABEL]: CUA_DRIVER_VERSION,
+      [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
+      [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+    })).toBe(true);
+
+    expect(imageLabelsMatch({
+      [OPENBOT_MANAGED_LABEL]: "0",
+      [MANAGED_LABEL]: "1",
+      [DRIVER_LABEL]: CUA_DRIVER_VERSION,
+      [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
+      [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+    })).toBe(false);
   });
 
   it("fails closed instead of giving Apple container an invalid dynamic-port spec", async () => {

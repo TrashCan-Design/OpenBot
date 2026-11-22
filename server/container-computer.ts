@@ -32,6 +32,7 @@ export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
 export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "7";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
+export const OPENBOT_IMAGE_LAYER_LABEL = "com.openbot.image-layer";
 export const IMAGE = `${IMAGE_REPOSITORY}:driver-${CUA_DRIVER_VERSION}-v${IMAGE_LAYER_VERSION}`;
 // COMPOSE_PROJECT_NAME=openbot in .env.example produces "openbot-computer" via Docker Compose naming.
 // An explicit override takes precedence; otherwise the openbot-first default matches the compose project.
@@ -39,6 +40,11 @@ export const CONTAINER =
   process.env.OPENBOT_CONTAINER ??
   process.env.OMB_CONTAINER ??
   "openbot-computer";
+export const OPENBOT_MANAGED_LABEL = "com.openbot.local-vm";
+export const OPENBOT_DRIVER_LABEL = "com.openbot.cua-driver";
+export const OPENBOT_BASE_IMAGE_LABEL = "com.openbot.cua-base";
+export const OPENBOT_WORKSPACE_LABEL = "com.openbot.workspace";
+export const OPENBOT_TARGET_LABEL = "com.openbot.local-vm-target";
 export const MANAGED_LABEL = "com.openmausbot.local-vm";
 export const DRIVER_LABEL = "com.openmausbot.cua-driver";
 export const BASE_IMAGE_LABEL = "com.openmausbot.cua-base";
@@ -377,25 +383,32 @@ function existingContainerProblem(status: ContainerComputerStatus): string | nul
 }
 
 export function imageLabelsMatch(labels: Record<string, string> | undefined): boolean {
+  const isManaged = (labels?.[OPENBOT_MANAGED_LABEL] ?? labels?.[MANAGED_LABEL]) === "1";
+  const driver = labels?.[OPENBOT_DRIVER_LABEL] ?? labels?.[DRIVER_LABEL];
+  const baseImage = labels?.[OPENBOT_BASE_IMAGE_LABEL] ?? labels?.[BASE_IMAGE_LABEL];
+  const layer = labels?.[OPENBOT_IMAGE_LAYER_LABEL] ?? labels?.[IMAGE_LAYER_LABEL];
   return (
-    labels?.[MANAGED_LABEL] === "1" &&
-    labels?.[DRIVER_LABEL] === CUA_DRIVER_VERSION &&
-    labels?.[BASE_IMAGE_LABEL] === BASE_IMAGE_DIGEST &&
-    labels?.[IMAGE_LAYER_LABEL] === IMAGE_LAYER_VERSION
+    isManaged &&
+    driver === CUA_DRIVER_VERSION &&
+    baseImage === BASE_IMAGE_DIGEST &&
+    layer === IMAGE_LAYER_VERSION
   );
 }
 
 /** Ownership ignores image/driver versions, so an older OMB container stays removable. */
-function containerOwnershipLabelsMatch(
+export function containerOwnershipLabelsMatch(
   labels: Record<string, string> | undefined,
   target: LocalVmTarget,
 ): boolean {
+  const isManaged = (labels?.[OPENBOT_MANAGED_LABEL] ?? labels?.[MANAGED_LABEL]) === "1";
+  const hasWorkspace = (labels?.[OPENBOT_WORKSPACE_LABEL] ?? labels?.[WORKSPACE_LABEL]) === "1";
+  const targetLabel = labels?.[OPENBOT_TARGET_LABEL] ?? labels?.[TARGET_LABEL];
   return (
-    labels?.[MANAGED_LABEL] === "1" &&
-    labels?.[WORKSPACE_LABEL] === "1" &&
+    isManaged &&
+    hasWorkspace &&
     (target.key === SHARED_LOCAL_VM_TARGET.key
-      ? labels?.[TARGET_LABEL] === undefined || labels?.[TARGET_LABEL] === target.label
-      : labels?.[TARGET_LABEL] === target.label)
+      ? targetLabel === undefined || targetLabel === target.label
+      : targetLabel === target.label)
   );
 }
 
@@ -469,11 +482,17 @@ export function cuaExecArgs(
   ];
 }
 
+const pendingContainerFrames = new Map<string, Promise<{ png: string; format: "png" | "jpeg" }>>();
+const screenshotStatusCache = new Map<
+  string,
+  { status: ContainerComputerStatus; expiresAt: number }
+>();
+
 export async function containerComputerStatus(
   runner: CommandRunner = sh,
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
-  options: { probeDesktop?: boolean } = {},
+  options: { probeDesktop?: boolean; skipFrameWait?: boolean } = {},
 ): Promise<ContainerComputerStatus> {
   const status = emptyStatus(platform, target);
   const runtimeStatus = await containerRuntimeStatus(runner, platform);
@@ -586,6 +605,10 @@ export async function containerComputerStatus(
     status.security === "hardened" &&
     status.persistence === "durable";
   if (canProbe) {
+    if (!options.skipFrameWait) {
+      const capture = pendingContainerFrames.get(target.key);
+      if (capture) await capture.catch(() => {});
+    }
     try {
       const expected = `cua-driver ${CUA_DRIVER_VERSION}`;
       const version = await runner(status.runtime, cuaExecArgs(["--version"], { container: target.containerName }), 8000);
@@ -927,7 +950,8 @@ export async function containerComputerAction(
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): Promise<ContainerComputerStatus> {
-  if (runner === sh && platform === process.platform) screenshotStatusCache.delete(target.key);
+  screenshotStatusCache.delete(target.key);
+  pendingContainerFrames.delete(target.key);
   const before = await containerComputerStatus(runner, platform, target);
   const runtime = before.runtime;
   if (!runtime) throw Object.assign(new Error(before.problem ?? "No container runtime is installed"), { status: 409 });
@@ -1013,26 +1037,22 @@ with Image.open(sys.argv[1]) as image:
     image.convert("RGB").save(output, format="JPEG", quality=75)
 sys.stdout.write("jpeg:" + base64.b64encode(output.getvalue()).decode("ascii"))' "$1" 2>/dev/null || { base64 < "$1" | tr -d "\\n"; }`;
 
-const pendingContainerFrames = new Map<string, Promise<{ png: string; format: "png" | "jpeg" }>>();
-
 export async function containerComputerFrame(
   runner: CommandRunner = sh,
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): Promise<{ png: string; format: "png" | "jpeg" }> {
-  const cacheable = runner === sh && platform === process.platform;
-  if (cacheable) {
-    const pending = pendingContainerFrames.get(target.key);
-    if (pending) return pending;
-  }
+  const pending = pendingContainerFrames.get(target.key);
+  if (pending) return pending;
 
+  const cacheable = runner === sh && platform === process.platform;
   const capture = async (): Promise<{ png: string; format: "png" | "jpeg" }> => {
     const now = Date.now();
     const cached = screenshotStatusCache.get(target.key);
     const status =
       cacheable && cached && cached.expiresAt > now
         ? cached.status
-        : await containerComputerStatus(runner, platform, target);
+        : await containerComputerStatus(runner, platform, target, { skipFrameWait: true });
     if (!status.ready || !status.runtime) {
       if (cacheable) screenshotStatusCache.delete(target.key);
       throw Object.assign(new Error(status.problem ?? "The Local VM is not ready"), { status: 409 });
@@ -1072,9 +1092,10 @@ export async function containerComputerFrame(
     }
   };
 
-  if (!cacheable) return capture();
   const promise = capture().finally(() => {
-    pendingContainerFrames.delete(target.key);
+    if (pendingContainerFrames.get(target.key) === promise) {
+      pendingContainerFrames.delete(target.key);
+    }
   });
   pendingContainerFrames.set(target.key, promise);
   return promise;
@@ -1088,11 +1109,6 @@ export async function containerComputerScreenshot(
   const { png, format } = await containerComputerFrame(runner, platform, target);
   return `data:image/${format};base64,${png}`;
 }
-
-const screenshotStatusCache = new Map<
-  string,
-  { status: ContainerComputerStatus; expiresAt: number }
->();
 
 const containerMcpPath = SPAWNED_PROXIES.containerMcp;
 

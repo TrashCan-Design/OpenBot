@@ -22,7 +22,7 @@ settings() {
   # Where the files this installer places come from: this repository at the tag of the version it installs, and at
   # main when that tag does not have them. OMB_INSTALL_SOURCE names one copy to use instead (https://… or file:///…).
   REPOSITORY_FILES=https://raw.githubusercontent.com/TrashCan-Design/OpenBot
-  SOURCE_ASKED="${OMB_INSTALL_SOURCE:-}"
+  SOURCE_ASKED="${OPENBOT_INSTALL_SOURCE:-${OMB_INSTALL_SOURCE:-}}"
   SOURCE=""
   SOURCE_NAME=""
   # WARN-ONLY SANDBOX CHECKS. The self-check's results that do not stop an install when they fail: none of them lets a

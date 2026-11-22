@@ -2,13 +2,13 @@
 #
 # Caddy runs in the server's network namespace, so it reaches the server on
 # 127.0.0.1 — the server never binds a public interface. Ports are therefore
-# declared on the `omb` service (the namespace owner).
+# declared on the `openbot` service (the namespace owner).
 #
 #   cp .env.example .env   # set DOMAIN
-#   docker compose pull omb && docker compose up -d     # prebuilt image
-#   docker compose up -d --build                        # or build from source
+#   docker compose pull openbot && docker compose up -d     # prebuilt image
+#   docker compose up -d --build                            # or build from source
 services:
-  omb:
+  openbot: &openbot
     build:
       context: ..
       args:
@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
     # The bots' browsers (docs/browser-packaging.md, "Process hygiene"): an
     # init collects the browser processes whose parents exit, and Chrome
-    # gets the shared memory OMB's desktop containers give it.
+    # gets the shared memory OpenBot's desktop containers give it.
     init: true
     shm_size: 512m
     volumes:
@@ -27,28 +27,41 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      OMB_PORT: "8799"
-      OMB_WEBHOOK_PORT: "8800"
+      OPENBOT_PORT: "8799"
+      OPENBOT_WEBHOOK_PORT: "8800"
       # what the app prints as hook URLs — Caddy passes /hooks/* straight through
-      OMB_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
       # pairing links for remote clients point here (docs/self-hosting.md)
-      OMB_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_PUBLIC_URL: https://${DOMAIN}
       # Who may sign in with an emailed code at /pair (docs/self-hosting.md,
       # "Sign in with your email"). Empty means pairing codes only.
-      OMB_SIGNIN_EMAILS: ${OMB_SIGNIN_EMAILS:-}
-      OMB_SIGNIN_MEMBER_EMAILS: ${OMB_SIGNIN_MEMBER_EMAILS:-}
+      OPENBOT_SIGNIN_EMAILS: ${OPENBOT_SIGNIN_EMAILS:-${OMB_SIGNIN_EMAILS:-}}
+      OPENBOT_SIGNIN_MEMBER_EMAILS: ${OPENBOT_SIGNIN_MEMBER_EMAILS:-${OMB_SIGNIN_MEMBER_EMAILS:-}}
+      OMB_PORT: "8799"
+      OMB_WEBHOOK_PORT: "8800"
+      OMB_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
+      OMB_PUBLIC_URL: https://${DOMAIN}
+      OMB_SIGNIN_EMAILS: ${OPENBOT_SIGNIN_EMAILS:-${OMB_SIGNIN_EMAILS:-}}
+      OMB_SIGNIN_MEMBER_EMAILS: ${OPENBOT_SIGNIN_MEMBER_EMAILS:-${OMB_SIGNIN_MEMBER_EMAILS:-}}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8799/api/health | grep -qE 'openbot|openmausbot'"]
       interval: 30s
       timeout: 5s
       retries: 3
 
+  # Legacy alias fallback for existing tooling and test suites
+  omb:
+    init: true
+    shm_size: 512m
+    image: ghcr.io/trashcan-design/openbot:latest
+    profiles: ["fallback"]
+
   caddy:
     image: caddy:2
     restart: unless-stopped
-    network_mode: "service:omb"
+    network_mode: "service:openbot"
     depends_on:
-      omb:
+      openbot:
         condition: service_healthy
     environment:
       DOMAIN: ${DOMAIN}

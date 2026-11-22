@@ -77,6 +77,8 @@ describe("the per-launch control token", () => {
     }
     expect((await ask("POST", "/pairing", {}, undefined, { "x-openmausbot-control-token": "d".repeat(43) })).status).toBe(403);
     expect((await ask("POST", "/pairing", {}, undefined, { "x-openmausbot-control-token": CONTROL_TOKEN.slice(1) })).status).toBe(403);
+    expect((await ask("GET", "/state", {}, undefined, { "x-openbot-control-token": CONTROL_TOKEN })).status).toBe(200);
+    expect((await ask("GET", "/state", {}, undefined, { "x-openmausbot-control-token": CONTROL_TOKEN })).status).toBe(200);
     expect(devices.pairing()).toBeNull();
   });
 
@@ -88,8 +90,11 @@ describe("the per-launch control token", () => {
   });
 
   it("waits for the app's token when the app launched the sidecar, and otherwise takes a script's or makes one", () => {
+    expect(initialControlToken({ OPENBOT_CONTROL_TOKEN: CONTROL_TOKEN }, true)).toBeNull();
     expect(initialControlToken({ OMB_CONTROL_TOKEN: CONTROL_TOKEN }, true)).toBeNull();
+    expect(initialControlToken({ OPENBOT_CONTROL_TOKEN: CONTROL_TOKEN }, false)).toBe(CONTROL_TOKEN);
     expect(initialControlToken({ OMB_CONTROL_TOKEN: CONTROL_TOKEN }, false)).toBe(CONTROL_TOKEN);
+    expect(initialControlToken({ OPENBOT_CONTROL_TOKEN: "a".repeat(43), OMB_CONTROL_TOKEN: "b".repeat(43) }, false)).toBe("a".repeat(43));
     for (const env of [{}, { OMB_CONTROL_TOKEN: "short" }, { OMB_CONTROL_TOKEN: `${"c".repeat(42)}!` }]) {
       const token = initialControlToken(env, false);
       expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
