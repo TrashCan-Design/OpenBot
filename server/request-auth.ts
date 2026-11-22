@@ -180,12 +180,25 @@ export function requestOrigin(req: IncomingMessage): string | null {
   return `${proto}://${host.toLowerCase()}`;
 }
 
-/** A proxy that hands the server a loopback Host must not turn a remote client into the owner. */
+/** Every header a reverse proxy uses to name its client, so one that sets only X-Real-IP is still not loopback. */
+export const PROXY_HEADERS = [
+  "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded",
+  "x-real-ip", "cf-connecting-ip", "true-client-ip", "x-client-ip",
+] as const;
+
+/** Security: loopback trust rests on the Host header, which any client writes, so a request is remote (never the owner)
+ * when it came through a proxy, over the IPC socket, or from another machine's address, as on a LAN listener. */
 export function isProxied(req: IncomingMessage): boolean {
-  const h = req.headers;
-  const remote = req.socket?.remoteAddress;
-  const remotePeer = Boolean(remote && !isLoopbackHost(remote));
-  return ipcPeer(req) || remotePeer || Boolean(h["x-forwarded-for"] || h["x-forwarded-proto"] || h["x-forwarded-host"] || h["forwarded"]);
+  if (ipcPeer(req) || networkPeer(req)) return true;
+  return PROXY_HEADERS.some((name) => req.headers[name] !== undefined);
+}
+
+const LOOPBACK_PEER = /^(?:127\.|::1$|::ffff:127\.)/;
+
+/** A TCP peer other than this machine. */
+export function networkPeer(req: IncomingMessage): boolean {
+  const address = req.socket?.remoteAddress;
+  return typeof address === "string" && !LOOPBACK_PEER.test(address);
 }
 
 /** An IPC listener's only peer is a forwarding gateway, so its requests are remote: never loopback trust. */
@@ -316,7 +329,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/image$/ },
   // an app row's document is transcript data, read under the transcript's rules
-  { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/app$/ },
+  { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/app(?:\/download)?$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/export$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/evidence(?:\.tar|\/[A-Za-z0-9-]{8,64}\/step-\d{6,12}\.jpg)?$/ },
   { methods: ["GET", "POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
@@ -353,6 +366,11 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/browser\/action$/ },
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/browser\/(?:stream|download\/[\w-]+)$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/browser\/upload$/ },
+  // A bot's Data, read-only as a phone shows it: the sheet and tables, a page of a table or card (a catalog lookup, never
+  // SQL), a chart card's picture. Running, changing and exporting stay an admin's (data/routes.ts).
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/data$/ },
+  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/data\/page$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/data\/cards\/c_\d+\/image$/ },
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/connector-cards\/[\w-]+\/status$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/connector-cards\/[\w-]+\/(?:resume|dismiss)$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/always-allow$/ }, // must match a pending card

@@ -47,13 +47,14 @@ class Session(
     private val clientFactory: (Connection, String?) -> CompanionClient = { connection, token ->
         CompanionClient(connection, token, httpClient)
     },
-    private val pairFn: suspend (Connection, String, String, String) -> PairingOutcome =
-        { connection, credential, deviceName, pairRequestId ->
+    private val pairFn: suspend (Connection, String, String, String, String?) -> PairingOutcome =
+        { connection, credential, deviceName, pairRequestId, replacesToken ->
             CompanionClient.pairFirstReachable(
                 connection = connection,
                 credential = credential,
                 deviceName = deviceName,
                 pairRequestId = pairRequestId,
+                replacesToken = replacesToken,
                 client = httpClient,
             )
         },
@@ -331,7 +332,8 @@ class Session(
                 serverScopes = paired.session.scopes,
             ) to paired.token
         }
-        val outcome = pairFn(invited, credential, deviceName, requestId)
+        val replacesToken = registry.matchingConnection(invited)?.let { tokenStore.read(it.id) }
+        val outcome = pairFn(invited, credential, deviceName, requestId, replacesToken)
         val paired = outcome.response
         val winner = outcome.connection.activeEndpoint
             ?: CompanionEndpoint.direct(outcome.connection.host, outcome.connection.port, priority = 10_000)
@@ -2441,6 +2443,7 @@ class Session(
             val leaf = activeClient.setActiveBranch(forBot.id, to.id, forBot.threadId)
             _state.update { it.apply(Frame.Thread(forBot.threadId, leaf)) }
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
         }
     }
@@ -2451,6 +2454,7 @@ class Session(
             val exported = activeClient.export(threadId, format)
             ExportedTranscript(exported.data, exported.filename, exported.contentType)
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             _actionError.value = error.message
             null
         }
@@ -2473,6 +2477,7 @@ class Session(
                 _actionError.value = error.message
             }
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             if (!quietly) _actionError.value = error.message
         }
     }

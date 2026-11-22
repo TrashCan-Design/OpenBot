@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 
 import type { WireBot, WireGroup } from "../../shared/wire.ts";
+import { KEPT_ORIGINALS_DIR, keptOriginal } from "../attachment-originals.ts";
 import {
   ATTACHMENTS_DIR, deleteAttachment, extensionForMime, FILE_MAX_BYTES, IMAGE_MAX_BYTES, parseAudioRange, readAttachment,
   saveFile, saveImageUpload, validateAttachmentUploadId, type SavedAttachment,
@@ -218,9 +219,11 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       if (folderEntry === null) return json(res, 400, { error: "entry must be one file name" });
       let file: Awaited<ReturnType<typeof openMessageFile>>;
       try {
+        const kept = message.role === "user" && !folderEntry ? keptOriginal(href, ATTACHMENTS_DIR) : null;
         file = folderEntry
           ? await openMessageFolderEntry(href, folderEntry, roots)
-          : await openMessageFile(href, roots);
+          : kept ? await openMessageFile(kept, [KEPT_ORIGINALS_DIR]) : await openMessageFile(href, roots);
+        if (kept) res.setHeader("x-openbot-kept-original", "1");
       } catch (error) {
         const code = (error as { code?: unknown } | null)?.code;
         const status = (error as { status?: unknown } | null)?.status;
@@ -362,7 +365,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       try {
         // Returning must not destroy the socket: the caller still sends the 4xx when the byte count crosses the limit.
         const chunks = req.iterator({ destroyOnReturn: false }) as AsyncIterable<Buffer>;
-        const saved = await saveFile(chunks, name, rawType ?? "", { uploadId, expectedBytes: declaredLength });
+        const saved = await saveFile(chunks, name, rawType ?? "", { uploadId, expectedBytes: declaredLength, keepOriginal: true });
         deps.uploads.note(auth, basename(saved.path));
         return json(res, 201, saved);
       } catch (error) {

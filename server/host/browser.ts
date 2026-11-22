@@ -43,6 +43,7 @@ import { passkeyAnnotation } from "../browser/passkey-notice.ts";
 import { LentChromeDoors, lentChromeGuidance, type ChromeLender } from "../browser/lent-chrome.ts";
 import type { ChromeRoute } from "../device-links.ts";
 import type { EngineBrowsers } from "../engine-memory.ts";
+import { createBrowserReclaim } from "./browser-reclaim.ts";
 import { augmentedPath } from "../env-path.ts";
 import { harnessMcpTokenEnv } from "../harness-mcp-token.ts";
 import type { FillLoginDeps } from "../login-fill.ts";
@@ -433,6 +434,19 @@ export function createBrowserHost(deps: BrowserHostDeps) {
       await sleep(2_000);
     }
   }
+  // Memory relief's early close of unused browsers: attached and Chrome-engine ones never.
+  const browserReclaim = createBrowserReclaim({
+    candidates: (busy) => {
+      const busySessions = new Set(busy.flatMap((threadId) => threadBrowser(threadId)?.session ?? []));
+      return [...usedBrowserSessions].map(([session, spec]) => {
+        const working = agentBrowserRuntime.working(session), watched = agentBrowserRuntime.watched(session);
+        return { session, held: !turnResources.free(`browser:${session}`), working, running: browserRunning(session, spec),
+          attached: Boolean(chromeTarget(session, spec)) || attachesToChrome(spec.env), watched, turnRunning: busySessions.has(session),
+          savesSignIns: spec.env.AGENT_BROWSER_RESTORE_SAVE === "auto" };
+      });
+    },
+    close: (session) => { const spec = usedBrowserSessions.get(session); return spec ? browserRuntime.closeUnused(session, spec) : Promise.resolve(false); },
+  });
   const engineBrowsers: EngineBrowsers = {
     starts: (threadId) => {
       const browser = threadBrowser(threadId);
@@ -444,8 +458,10 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     },
     stopped: (threadId) => {
       const browser = threadBrowser(threadId);
-      if (browser?.session !== undefined && browser.spec) void closeForMemory(browser.session, browser.spec);
+      return browser?.session !== undefined && browser.spec ? closeForMemory(browser.session, browser.spec) : undefined;
     },
+    reclaimUnused: (pressure) => browserReclaim.reclaim(pressure),
+    anyRunning: () => [...usedBrowserSessions].some(([session, spec]) => browserRunning(session, spec)),
   };
   deps.engineMemory?.useBrowsers(engineBrowsers);
   /** A deleted bot's or profile's browser on the new engine, whatever the flag says now. */

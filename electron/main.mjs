@@ -1,5 +1,6 @@
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Tray, WebContentsView, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess, nativeTheme } from "electron";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,7 +12,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, speechBusy, startSpeech, stopSpeech } from "./speech.mjs";
 import { installTalk, isTalkPanel } from "./talk-main.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
-import { linuxDisablesGpu } from "./linux-gpu.mjs";
+import { disableWaylandColorManager, linuxDisablesGpu } from "./linux-gpu.mjs";
 import { pasteMenuItem } from "./paste-menu-item.mjs";
 import { attachUpdaterWindow, startUpdater, registerUpdaterIpc, reopenedOutOfSight, quietSignals } from "./updater.mjs";
 import {
@@ -187,6 +188,7 @@ function applyUnreadBadge(win = mainWindow) {
 if (process.platform === "linux") {
   if (linuxDisablesGpu()) app.disableHardwareAcceleration();
   app.setDesktopName("com.openmausbot.app.desktop");
+  disableWaylandColorManager(app.commandLine);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -295,7 +297,8 @@ const managedDesktopRelay = createManagedDesktopRelay();
 const includedX = createDesktopIncludedX({ account: () => cloudAccount, server: () => serverProc, log: slog }), includedPages = createDesktopIncludedPages({ account: () => cloudAccount, server: () => serverProc, log: slog });
 const cloudPower = createCloudPowerGate({ power: () => cloudAccount?.power() ?? null, wanted: () => Boolean(cloudSync?.running() || computerSharing?.lendingToCloud()) });
 const utilityServerExits = new WeakMap();
-const UTILITY_SERVER_STOP_TIMEOUT_MS = 6_500;
+// The server's graceful shutdown deadline (8 s) and its 1 s log flush
+const UTILITY_SERVER_STOP_TIMEOUT_MS = 9_500;
 const trustedApprovalMode = createTrustedApprovalModeCoordinator({ randomId: randomUUID });
 const desktopMutationToken = randomBytes(32).toString("base64url");
 const desktopLaunchId = randomUUID();
@@ -349,6 +352,17 @@ async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_M
   if (!proc) return true;
   const exited = utilityServerExits.get(proc);
   if (!exited) return false;
+  if (process.platform === "win32" && proc.pid) {
+    try {
+      const taskkill = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+      execFileSync(taskkill, ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {
+      try {
+        execFileSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      } catch {
+      }
+    }
+  }
   try {
     proc.kill();
   } catch {
@@ -793,6 +807,12 @@ async function gatherDiagnostics() {
   })
     .then((res) => (res.ok ? res.json() : null))
     .catch(() => null);
+  const performance = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/diagnostics/performance`, {
+    signal: AbortSignal.timeout(3_000),
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((body) => (typeof body?.text === "string" ? body.text : ""))
+    .catch(() => "");
   const logPath = path.join(LOG_DIR, "server.log");
   const log = readSafeLogTail(logPath);
   const desktopLog = readSafeLogTail(DESKTOP_CRASH_LOG);
@@ -808,6 +828,7 @@ async function gatherDiagnostics() {
       uptimeSeconds: Math.round(process.uptime()),
     },
     configSummary: serverStatus ?? {},
+    performance,
     desktopLogTail: desktopLog?.tail ?? "",
     updaterLogTail: updaterLog?.tail ?? "",
     logTail: log?.tail ?? "",

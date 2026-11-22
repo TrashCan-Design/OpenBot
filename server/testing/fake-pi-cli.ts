@@ -31,9 +31,10 @@ if (process.env.FAKE_PI_DUMP) {
   try {
     // Read OMB_MCP_CONFIG now: the driver deletes the temp file when the turn settles.
     let mcpConfig: unknown = null;
-    if (process.env.OMB_MCP_CONFIG) {
+    const mcpConfigPath = process.env.OPENBOT_MCP_CONFIG ?? process.env.OMB_MCP_CONFIG;
+    if (mcpConfigPath) {
       try {
-        mcpConfig = JSON.parse(readFileSync(process.env.OMB_MCP_CONFIG, "utf8"));
+        mcpConfig = JSON.parse(readFileSync(mcpConfigPath, "utf8"));
       } catch {}
     }
     appendFileSync(

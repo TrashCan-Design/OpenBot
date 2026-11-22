@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { augmentedPath } from "../env-path.ts";
-import { ChatToolSessionError, mountChatTools, trimmedToolsNotice, type ChatToolSession } from "./chat-mcp-tools.ts";
+import { chatMcpEnvironment, ChatToolSessionError, mountChatTools, trimmedToolsNotice, type ChatToolSession } from "./chat-mcp-tools.ts";
 import type { ToolScope } from "../../shared/tool-scope.ts";
 import { catalogServer, CUA_DRIVER_WINDOWS_TOOLS, syntheticToolNames } from "../testing/cua-driver-tools.ts";
 import { startFakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
@@ -48,6 +48,19 @@ const dirs: string[] = [];
 const sessions: ChatToolSession[] = [];
 const controllers: AbortController[] = [];
 const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false };
+
+describe("configured MCP environment", () => {
+  it("keeps an npm cache that works and preserves an explicit override", () => {
+    const cache = mkdtempSync(join(tmpdir(), "openbot-npm-cache-"));
+    try {
+      const inherited = { npm_config_cache: cache, PATH: "/bin" };
+      expect(chatMcpEnvironment({}, inherited).npm_config_cache).toBe(cache);
+      expect(chatMcpEnvironment({ npm_config_cache: "/tmp/custom-npm-cache" }, inherited).npm_config_cache).toBe("/tmp/custom-npm-cache");
+    } finally {
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
+});
 
 function fixture(body = "", toolSchema: Record<string, unknown> = schema) {
   const dir = mkdtempSync(join(tmpdir(), "omb-chat-mcp-"));
@@ -529,8 +542,8 @@ describe("Chat MCP approvals by server", () => {
     sessions.push(session);
     expect(session.definitions.map((tool) => tool.function.name).sort()).toEqual(["agents_write", "audit_write", "computer_write"]);
     expect(session.view("agents_write", { value: "x" })).toEqual({ title: "agents_write", input: { value: "x" }, ask: false });
-    expect(session.view("audit_write", { value: "x" })).toEqual({ title: "audit_write", input: { value: "x" }, ask: true, grant: grantFor("audit", "write") });
-    expect(session.view("computer_write", { value: "x" })).toEqual({ title: "computer_write", input: { value: "x" }, ask: true });
+    expect(session.view("audit_write", { value: "x" })).toEqual({ title: "audit_write", permissionTool: "mcp__audit__write", input: { value: "x" }, ask: true, grant: grantFor("audit", "write") });
+    expect(session.view("computer_write", { value: "x" })).toEqual({ title: "computer_write", permissionTool: "mcp__computer__write", input: { value: "x" }, ask: true });
   });
 
   it("ties an allow to the server as launched: the same server keeps it, a changed one under the same name does not", async () => {
@@ -577,7 +590,7 @@ describe("Chat MCP tool directory", () => {
       expect(JSON.parse(search.text).matches[0].name).toBe("payments_list");
       expect(session.view("whop_search_tools", { query: "list payments" })).toEqual({ title: "whop_search_tools", input: { query: "list payments" }, ask: false });
       const args = { name: "payments_list", arguments: { company_id: "biz_1" } };
-      expect(session.view("whop_call_tool", args)).toEqual({ title: "whop_payments_list", input: { company_id: "biz_1" }, ask: true, grant: grantFor("whop", "payments_list") });
+      expect(session.view("whop_call_tool", args)).toEqual({ title: "whop_payments_list", permissionTool: "mcp__whop__payments_list", input: { company_id: "biz_1" }, ask: true, grant: grantFor("whop", "payments_list") });
       await expect(session.execute("whop_call_tool", args, controller.signal)).resolves.toMatchObject({ ok: true, text: "remote execution recorded" });
       expect(remote.calls).toEqual([{ name: "payments_list", arguments: { company_id: "biz_1" } }]);
       const nameless = await session.execute("whop_call_tool", { arguments: {} }, controller.signal);
@@ -614,7 +627,7 @@ describe("Chat MCP tool directory", () => {
       const session = await mountChatTools({ custom: { whop: { type: "http", url: remote.url, headers: {} } } }, controller.signal);
       sessions.push(session);
       expect(session.definitions.map((tool) => tool.function.name)).toEqual(whopLikeCatalog(5).map((tool) => `whop_${tool.name.replace("-", "_")}`));
-      expect(session.view("whop_payments_list", { company_id: "biz_1" })).toEqual({ title: "whop_payments_list", input: { company_id: "biz_1" }, ask: true, grant: grantFor("whop", "payments_list") });
+      expect(session.view("whop_payments_list", { company_id: "biz_1" })).toEqual({ title: "whop_payments_list", permissionTool: "mcp__whop__payments_list", input: { company_id: "biz_1" }, ask: true, grant: grantFor("whop", "payments_list") });
     } finally { await remote.close(); }
   });
 });

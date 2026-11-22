@@ -168,6 +168,12 @@ describe("small rules", () => {
     expect(safeFileName("a<b>:c?.txt")).toBe("a_b__c_.txt");
     expect(safeFileName("..")).toBe("download");
     expect(Buffer.byteLength(safeFileName(`${"é".repeat(300)}.txt`))).toBeLessThanOrEqual(255);
+    expect(safeFileName("con.txt")).toBe("_con.txt");
+    expect(safeFileName("AUX")).toBe("_AUX");
+    expect(safeFileName("com1.json")).toBe("_com1.json");
+    expect(safeFileName("file.txt.")).toBe("file.txt");
+    expect(safeFileName("a".repeat(300))).toBe("a".repeat(255));
+    expect(Buffer.byteLength(safeFileName("🙂".repeat(70)), "utf8")).toBeLessThanOrEqual(255);
   });
 
   it("reports addresses without their queries, and names human checks by their frames", () => {

@@ -124,7 +124,7 @@ const proxy = createProxyHandler({
     mutationToken: parentPort ? () => mutationToken : undefined,
     // Also stamps lastSeenAt.
     authenticate: (token) => devices.authenticate(token),
-    redeem: (code, deviceName, pairRequestId) => devices.redeem(code, deviceName, pairRequestId),
+    redeem: (code, deviceName, pairRequestId, replacesToken) => devices.redeem(code, deviceName, pairRequestId, replacesToken),
     serverName: machineName,
     hosts: () => hostCandidates(),
     endpoints: () => companionEndpointCandidates(COMPANION_PORT, undefined, undefined, hostedUrl),
@@ -138,6 +138,21 @@ companion.on("upgrade", proxy.upgrade);
 const managedOrigin = PRIVATE_ORIGIN ? createServer(gzipTunnelReplies(proxy)) : null;
 managedOrigin?.on("upgrade", proxy.upgrade);
 
+function disconnectDevice(deviceId: string): void {
+  connectedDevices.disconnect(deviceId);
+  proxy.disconnectDevice(deviceId);
+}
+
+function deviceRevoked(deviceId: string): void {
+  if (parentPort && !mutationToken) return;
+  void notifyDeviceRevoked({ harnessPort: HARNESS_PORT, deviceId, mutationToken: mutationToken ?? undefined });
+}
+
+devices.onReplaced((deviceId) => setImmediate(() => {
+  disconnectDevice(deviceId);
+  deviceRevoked(deviceId);
+}));
+
 const control = createControlServer({
   devices,
   controlToken: () => controlToken,
@@ -149,16 +164,8 @@ const control = createControlServer({
   },
   discovery: () => ({ advertising: mdns.advertising, name: service().name }),
   connectedDeviceIds: connectedDevices.ids,
-  disconnectDevice: (deviceId) => {
-    connectedDevices.disconnect(deviceId);
-    proxy.disconnectDevice(deviceId);
-  },
-  // The harness hears a phone as this computer, so only the sidecar can tell
-  // it the phone lost access and end the Live call that phone holds.
-  revoked: (deviceId) => {
-    if (parentPort && !mutationToken) return;
-    void notifyDeviceRevoked({ harnessPort: HARNESS_PORT, deviceId, mutationToken: mutationToken ?? undefined });
-  },
+  disconnectDevice,
+  revoked: deviceRevoked,
   refreshTailscale: () => refreshTailnetName(),
 });
 

@@ -22,6 +22,10 @@ const reply = JSON.parse(readFileSync(process.env.SCRIPT, "utf8"));
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (!line.trim()) return;
   const msg = JSON.parse(line);
+  if (msg.method === "tools/list" && process.env.CATALOG) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: JSON.parse(readFileSync(process.env.CATALOG, "utf8")) }) + "\\n");
+    return;
+  }
   if (msg.method === "tools/call") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: reply }) + "\\n");
     return;
@@ -46,7 +50,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (script.malformedFrame) return process.stdout.write("not-json\\n");
     if (script.malformedCatalog) return send(msg.id, { tools: [{ inputSchema: { type: "object" } }] });
     if (msg.params?.collision) { delayedList = msg; return; }
-    return send(msg.id, catalog(msg.params));
+    const listed = catalog(msg.params);
+    if (script.collidingQuery) listed.tools.push({ name: "query_result", description: "Upstream query with different arguments", inputSchema: { type: "object", properties: { sql: { type: "string" } } } });
+    return send(msg.id, listed);
   }
   if (msg.method === "tools/call") {
     appendFileSync(process.env.SCRIPT + ".calls", msg.params.name + "\\n");
@@ -125,6 +131,12 @@ describe("mcp-gate", () => {
     return JSON.parse(await nextLine());
   };
 
+  const listTools = async (tools: unknown[], cursor?: string) => {
+    writeFileSync(join(scratch, "catalog.json"), JSON.stringify({ tools }));
+    send({ jsonrpc: "2.0", id: 7, method: "tools/list", params: cursor === undefined ? {} : { cursor } });
+    await nextLine();
+  };
+
   beforeEach(() => {
     scratch = mkdtempSync(join(tmpdir(), "omb-gate-test-"));
     lines = [];
@@ -157,7 +169,7 @@ describe("mcp-gate", () => {
   });
 
   it("leaves a small tool result exactly as the server sent it", async () => {
-    const result = { content: [{ type: "text", text: JSON.stringify({ cart: { total: 131 } }) }] };
+    const result = { content: [{ type: "text", text: JSON.stringify({ cart: { total: 131 } }) }], structuredContent: { cart: { total: 131 } } };
     start(result);
     expect((await call("get_food_cart")).result).toEqual(result);
     expect(existsSync(join(scratch, "spill"))).toBe(false);
@@ -184,12 +196,13 @@ describe("mcp-gate", () => {
     expect(kept.nextOffset).toBe("1");
   });
 
-  it("trims structuredContent alongside the text it duplicates", async () => {
+  it("trims structuredContent alongside the text it duplicates when an outputSchema is declared", async () => {
     const products = Array.from({ length: 300 }, (_, i) => ({ id: `p${i}`, blurb: "x".repeat(300) }));
     start({
       content: [{ type: "text", text: JSON.stringify({ products }) }],
       structuredContent: { products },
-    });
+    }, { CATALOG: join(scratch, "catalog.json") });
+    await listTools([{ name: "search_products", outputSchema: { type: "object" } }]);
 
     const answer = await call("search_products");
     expect(answer.result.structuredContent.products.length).toBeLessThan(300);
@@ -200,12 +213,35 @@ describe("mcp-gate", () => {
     expect(answer.result.structuredContent).toEqual(kept);
   });
 
+  it("omits trimmed structuredContent for unknown tools and updates schemas across listing pages and refreshes", async () => {
+    const products = Array.from({ length: 300 }, (_, i) => ({ id: `p${i}`, blurb: "x".repeat(300) }));
+    start({
+      content: [{ type: "text", text: JSON.stringify({ products }) }],
+      structuredContent: { products },
+    }, { CATALOG: join(scratch, "catalog.json") });
+
+    const unknown = (await call("search_products")).result;
+    expect(unknown).not.toHaveProperty("structuredContent");
+    expect(unknown.content[0].text).toContain("SHAPED by OpenBot");
+
+    await listTools([{ name: "search_products", outputSchema: { type: "object" } }]);
+    await listTools([{ name: "other_tool" }], "second");
+    expect((await call("search_products")).result.structuredContent.products.length).toBeLessThan(products.length);
+    expect((await call("other_tool")).result).not.toHaveProperty("structuredContent");
+
+    await listTools([{ name: "search_products" }]);
+    const refreshed = (await call("search_products")).result;
+    expect(refreshed).not.toHaveProperty("structuredContent");
+    expect(refreshed.content[0].text).toContain("SHAPED by OpenBot");
+  });
+
   it("matches structuredContent to the text whatever its key order", async () => {
     const products = Array.from({ length: 300 }, (_, i) => ({ id: `p${i}`, blurb: "x".repeat(300) }));
     start({
       content: [{ type: "text", text: JSON.stringify({ products, meta: "x" }) }],
       structuredContent: { meta: "x", products },
-    });
+    }, { CATALOG: join(scratch, "catalog.json") });
+    await listTools([{ name: "search_products", outputSchema: { type: "object" } }]);
 
     const answer = await call("search_products");
     const text: string = answer.result.content[0].text;
@@ -448,6 +484,34 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await call("read", 2);
       const answer = await query({ result: "r1", query: "length(products)" }, 3);
       expect(answer.result.content[0].text).toBe("300");
+    });
+
+    it("replaces a colliding upstream query_result across all catalog pages", async () => {
+      start({ text: full, collidingQuery: true }, {}, SCOPED_UPSTREAM);
+      send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+      const first = JSON.parse(await nextLine()).result;
+      expect(first.nextCursor).toBe("second");
+      expect(first.tools.map((tool: { name: string }) => tool.name)).toEqual(["read", "write"]);
+      send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { cursor: "second" } });
+      const last = JSON.parse(await nextLine()).result;
+      expect(last.tools.map((tool: { name: string }) => tool.name)).toEqual(["write", "query_result"]);
+      expect(last.tools[1].inputSchema.required).toEqual(["result", "query"]);
+      expect(last.tools[1].description).not.toContain("Upstream query");
+      const local = await query({ result: "missing", query: "@" }, 3);
+      expect(local.result.isError).toBe(true);
+      expect(local.result.content[0].text).toContain("no longer held");
+      expect(existsSync(join(scratch, "reply.json.calls"))).toBe(false);
+    });
+
+    it("keeps the upstream query_result catalog and execution when shaping is disabled", async () => {
+      start({ text: "upstream query executed", collidingQuery: true }, { OMB_GATE_BUDGET: "0" }, SCOPED_UPSTREAM);
+      send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+      const listed = JSON.parse(await nextLine()).result;
+      expect(listed.tools.map((tool: { name: string }) => tool.name)).toEqual(["read", "write", "query_result"]);
+      expect(listed.tools[2].description).toContain("Upstream query");
+      const reply = await query({ sql: "SELECT 1" }, 2);
+      expect(reply.result.content[0].text).toBe("upstream query executed");
+      expect(readFileSync(join(scratch, "reply.json.calls"), "utf8")).toBe("query_result\n");
     });
   });
 

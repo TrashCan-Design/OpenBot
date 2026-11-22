@@ -189,6 +189,69 @@ test("pause cancels an already-queued restart and resume does not resurrect it",
   await f.supervisor.shutdown();
 });
 
+test("shutdown during an in-flight restart stops the newly spawned child", async (t) => {
+  let resolveRestart;
+  const restartPromise = new Promise((resolve) => { resolveRestart = resolve; });
+  let stoppedProc = null;
+  const child = new EventEmitter();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const supervisor = createServerSupervisor({
+    restart: () => restartPromise,
+    stop: async (proc) => { stoppedProc = proc; return true; },
+    onReady: () => {},
+    onUnavailable: () => {},
+    onExhausted: () => {},
+    retryDelaysMs: [10],
+  });
+  const first = new EventEmitter();
+  supervisor.watch(first);
+  supervisor.ready(first);
+  first.emit("exit", 1);
+  t.mock.timers.tick(10);
+  await Promise.resolve();
+
+  await supervisor.shutdown();
+  assert.equal(stoppedProc, null);
+
+  resolveRestart({ proc: child });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(stoppedProc, child, "the orphaned child spawned during restart must be stopped");
+});
+
+test("pause during an in-flight restart stops the newly spawned child", async (t) => {
+  let resolveRestart;
+  const restartPromise = new Promise((resolve) => { resolveRestart = resolve; });
+  let stoppedProc = null;
+  const child = new EventEmitter();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const supervisor = createServerSupervisor({
+    restart: () => restartPromise,
+    stop: async (proc) => { stoppedProc = proc; return true; },
+    onReady: () => {},
+    onUnavailable: () => {},
+    onExhausted: () => {},
+    retryDelaysMs: [10],
+  });
+  const first = new EventEmitter();
+  supervisor.watch(first);
+  supervisor.ready(first);
+  first.emit("exit", 1);
+  t.mock.timers.tick(10);
+  await Promise.resolve();
+
+  supervisor.pause();
+  assert.equal(stoppedProc, null);
+
+  resolveRestart({ proc: child });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(stoppedProc, child, "the orphaned child spawned during paused restart must be stopped");
+});
+
+
 test("local switching in main rejects dev mode and overlaps, and adopts the rollback child", () => {
   const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   const start = source.indexOf("async function switchLocalEnvironmentTo(");

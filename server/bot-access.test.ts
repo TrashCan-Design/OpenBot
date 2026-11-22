@@ -72,6 +72,8 @@ describe("what a request needs", () => {
     expect(levelNeeded("GET", "/api/threads/t1/messages")).toBe("view");
     expect(levelNeeded("POST", "/api/bots/b1/read")).toBe("view");
     expect(levelNeeded("POST", "/api/groups/g1/read")).toBe("view");
+    expect(levelNeeded("POST", "/api/bots/b1/data/page")).toBe("view");
+    expect(levelNeeded("POST", "/api/bots/b1/data/run")).toBe("chat");
     expect(levelNeeded("POST", "/api/bots/b1/tasks/t1")).toBe("view");
     expect(levelNeeded("POST", "/api/bots/b1/tasks/delete")).toBe("chat");
     expect(levelNeeded("POST", "/api/bots/b1/tasks")).toBe("chat");

@@ -10,9 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { link, open, unlink } from "node:fs/promises";
-import { join, extname } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { FILE_MAX_BYTES, PREVIEW_MAX_BYTES } from "../shared/upload-limits.ts";
 import { DATA_DIR } from "./config.ts";
+import { dropKeptOriginals, keepUploadedOriginal } from "./attachment-originals.ts";
 
 export { FILE_MAX_BYTES, PREVIEW_MAX_BYTES } from "../shared/upload-limits.ts";
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
@@ -177,7 +178,11 @@ export function deleteAttachment(path: string): void {
     if (committedAttachmentBytes !== null) {
       committedAttachmentBytes = Math.max(0, committedAttachmentBytes - size);
     }
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+  }
+  if (resolve(dirname(path)) === resolve(ATTACHMENTS_DIR)) {
+    dropKeptOriginals([basename(path)]);
   }
 }
 
@@ -357,7 +362,7 @@ export async function saveFile(
   chunks: AsyncIterable<Uint8Array>,
   originalName: string,
   mime: string,
-  options: { uploadId?: string; expectedBytes?: number } = {},
+  options: { uploadId?: string; expectedBytes?: number; keepOriginal?: boolean } = {},
 ): Promise<SavedFile> {
   const normalized = normalizedMime(mime);
   if (!normalized || !extensionForFileMime(normalized)) {
@@ -444,6 +449,7 @@ export async function saveFile(
         }
         await unlink(partialPath);
       }
+      if (options.keepOriginal) await keepUploadedOriginal(path);
       return { path, name, mime: normalized, bytes };
     } catch (error) {
       if (file && !closed) await file.close().catch(() => undefined);

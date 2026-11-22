@@ -66,7 +66,7 @@ export function originIsLoopback(origin: string | undefined): boolean {
  * opens only then. Standing alone, the token is OMB_CONTROL_TOKEN when a script chose one, else random. */
 export function initialControlToken(env: NodeJS.ProcessEnv, launchedByApp: boolean): string | null {
   if (launchedByApp) return null;
-  const chosen = env.OMB_CONTROL_TOKEN ?? "";
+  const chosen = env.OPENBOT_CONTROL_TOKEN ?? env.OMB_CONTROL_TOKEN ?? "";
   return /^[A-Za-z0-9_-]{43}$/.test(chosen) ? chosen : randomBytes(32).toString("base64url");
 }
 

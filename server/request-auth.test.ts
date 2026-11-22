@@ -17,6 +17,8 @@ import {
   isLoopbackHost,
   isProxied,
   isSameOrigin,
+  networkPeer,
+  PROXY_HEADERS,
   provesSameOrigin,
   parseCookies,
   requestOrigin,
@@ -106,6 +108,28 @@ describe("scopes", () => {
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
   });
 
+  it("lets a client read a bot's Data and nothing that runs, changes or exports it", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots/bot-1/data"],
+      ["POST", "/api/bots/bot-1/data/page"],
+      ["GET", "/api/bots/bot-1/data/cards/c_12/image"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
+    for (const [method, path] of [
+      ["POST", "/api/bots/bot-1/data/run"],
+      ["POST", "/api/bots/bot-1/data/cancel"],
+      ["POST", "/api/bots/bot-1/data/export"],
+      ["PATCH", "/api/bots/bot-1/data/cards/c_12"],
+      ["DELETE", "/api/bots/bot-1/data/cards/c_12"],
+      ["GET", "/api/bots/bot-1/data/tables/orders/stats"],
+      ["GET", "/api/bots/bot-1/data/tables/orders/histogram"],
+      ["POST", "/api/bots/bot-1/data"],
+      ["GET", "/api/bots/bot-1/data/page"],
+      ["POST", "/api/bots/bot-1/data/cards/c_12/image"],
+      ["GET", "/api/bots/bot-1/data/cards/x/image"],
+      ["GET", "/api/bots/bot-1/data/cards/c_12/image/extra"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
+  });
+
   it("keeps full backups, credentials and replacement behind admin scope", () => {
     for (const path of ["status", "export", "upload", "preview", "restore", "client-state", "download/123"]) {
       for (const method of ["GET", "POST", "DELETE"]) expect(requiredScope(method, `/api/workspace-backup/${path}`)).toBe("admin");
@@ -126,7 +150,7 @@ describe("scopes", () => {
       ["POST", "/api/bots/x/sign-in-cards/m/done"], ["POST", "/api/bots/x/sign-in-cards/m/cancel"], ["POST", "/api/bots/x/sign-in-cards/m/save-login"],
       ["GET", "/api/bots/x/sign-in-cards/m/save-login"],
       ["GET", "/api/bots/x/browser/live"], ["POST", "/api/bots/x/browser/action"],
-      ["GET", "/api/threads/t/messages/m/app"], ["POST", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/context"],
+      ["GET", "/api/threads/t/messages/m/app"], ["GET", "/api/threads/t/messages/m/app/download"], ["POST", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/context"],
       ["POST", "/api/bots/x/queue/q/steer"], ["POST", "/api/groups/g/queue/q/steer"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
@@ -249,6 +273,10 @@ describe("resolveRequestAuth", () => {
       ["GET", "/api/bots/b/browser/live"], ["POST", "/api/bots/b/browser/action"],
     ]) expect(check(method, path).auth?.kind, path).toBe("loopback");
     expect(check("GET", "/api/phones/self/jobs").auth).toEqual({ kind: "loopback", scopes: ["admin", "client"], companionDevice: "phone-1" });
+    expect(check("GET", "/api/bots/b/skills").auth?.kind).toBe("loopback");
+    expect(check("POST", "/api/bots/b/skills").auth).toBeNull();
+    expect(check("DELETE", "/api/attachments/abc-1.jpg").auth).toEqual({ kind: "loopback", scopes: ["admin", "client"], companionDevice: "phone-1" });
+    expect(check("DELETE", "/api/attachments/..%2Fconfig.json").auth).toBeNull();
     const plain = resolveRequestAuth(request({ host: "127.0.0.1:8799", "x-openmausbot-companion": "1", "x-openmausbot-companion-device": "phone-1" }, "GET"), {
       sessions, cookieName, streamPath: "/api/events", url: new URL("/api/phones/self/jobs", "http://localhost"),
       loopbackMutationToken: "desktop-secret", companionMutationToken: "relay-secret",
@@ -393,9 +421,19 @@ describe("resolveRequestAuth", () => {
   });
 
   it("never grants loopback trust to a request that came through a proxy, whatever Host it carries", () => {
-    expect(isProxied(request({ host: "localhost", "x-forwarded-for": "203.0.113.9" }))).toBe(true);
-    expect(isProxied(request({ host: "localhost", "x-forwarded-proto": "https" }))).toBe(true);
+    for (const name of PROXY_HEADERS) {
+      expect(isProxied(request({ host: "localhost", [name]: "synthetic" }))).toBe(true);
+      const res = resolve({ host: "localhost", [name]: "synthetic" });
+      expect(res.auth).toBeNull();
+      expect(res.status).toBe(403);
+      expect(res.error).toMatch(/came through a proxy.*pair this device/);
+    }
     expect(isProxied(request({ host: "localhost" }))).toBe(false);
+    expect(networkPeer({ socket: { remoteAddress: "192.168.1.100" } } as unknown as IncomingMessage)).toBe(true);
+    expect(networkPeer({ socket: { remoteAddress: "10.0.0.1" } } as unknown as IncomingMessage)).toBe(true);
+    expect(networkPeer({ socket: { remoteAddress: "127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);
+    expect(networkPeer({ socket: { remoteAddress: "::1" } } as unknown as IncomingMessage)).toBe(false);
+    expect(networkPeer({ socket: { remoteAddress: "::ffff:127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);
     expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "192.168.1.100" } } as unknown as IncomingMessage)).toBe(true);
     expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);
     expect(isProxied({ headers: { host: "127.0.0.1" }, socket: { remoteAddress: "::ffff:127.0.0.1" } } as unknown as IncomingMessage)).toBe(false);

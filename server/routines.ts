@@ -31,6 +31,7 @@ import { cloneAttachments } from "./routine-attachments.ts";
 import { loadInstalledPackage, loadRequestReceipts, loadRoutine, loadRun } from "./routine-load.ts";
 import { applyHolds, holdCauses, type AppliedHolds } from "./routine-holds.ts";
 import { sanitizeInput } from "./routine-input.ts";
+import { keptRunOutput } from "./routine-lines.ts";
 import { checkHold, CHECK_BOOT_HOLD_MS, type CheckHold } from "./routine-check-pacing.ts";
 import { resolveRoutineResultsThread, routineRunDefinition, type ResultsThreadAllocation } from "./routine-run-definition.ts";
 
@@ -236,6 +237,7 @@ export interface RoutineManagerOptions {
     runOn: RoutineRunOn,
     triggerSource: RoutineRunTrigger,
     onDispatchError: (message: string) => void,
+    runId?: string,
   ) => Promise<void>;
   startGoal?: (
     groupId: string | undefined,
@@ -1172,6 +1174,7 @@ export class RoutineManager {
               run.runOn ?? "maus",
               triggerSource,
               (message) => this.failThread(task.threadId, message, { cause: "refused" }),
+              run.id,
             );
           }
         } catch (error) {
@@ -1265,7 +1268,7 @@ export class RoutineManager {
       run.status = "running";
       run.attention = undefined;
     } else if (event.type === "item.completed" && event.itemType === "assistant_text") {
-      run.output = redactSecretsInText(event.text).trim().slice(0, 2_000);
+      run.output = keptRunOutput(run.output, redactSecretsInText(event.text).trim(), 2_000);
     } else if (event.type === "runtime.error") {
       run.error = redactSecretsInText(event.message).slice(0, 500);
       this.failureFacts.set(run.id, engineFacts(event));
@@ -1360,7 +1363,7 @@ export class RoutineManager {
 
   private async stopRun(run: RoutineRun, detail: string, status: "stopped" | "limit-reached") {
     if (run.target === "room-goal") run.goalStatus = status;
-    this.failRun(run, detail);
+    this.failRun(Object.assign(run, { partial: Boolean(run.output) || undefined }), detail);
     if (!run.threadId) return;
     if (run.target === "room-goal") await this.options.interruptGoal?.(run.groupId, run.threadId, { status, detail }).catch(() => {});
     else await this.options.interruptTurn?.(run.botId, run.threadId).catch(() => {});

@@ -11,6 +11,7 @@ export interface ServerText {
 export const CHAT_NOTICE = {
   "chat.notice.stalled": "no activity for {minutes} minutes — the turn was stopped",
   "chat.notice.stalledCommand": "the command `{command}` ran for {minutes} minutes without finishing and looks stuck — the turn was stopped",
+  "chat.notice.engineExited": "the process running this turn's AI ended — the turn was stopped",
 } as const;
 
 export type ChatNoticeKey = keyof typeof CHAT_NOTICE;

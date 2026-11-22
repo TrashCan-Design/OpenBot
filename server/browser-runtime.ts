@@ -830,6 +830,11 @@ export class BrowserRuntime {
     return Boolean(gate && (gate.calls || gate.agents || gate.humans || gate.owner !== null || gate.closing || gate.releasing || this.lanes.held(session)));
   }
 
+  watched(session: string): boolean {
+    const gate = this.gates.get(session);
+    return Boolean(gate && gate.watchers > 0 && !gate.closing);
+  }
+
   /** Told just before an idle close stops a session's browser. */
   onIdleClose(listener: (session: string) => void): void { this.idleCloseListeners.add(listener); }
 

@@ -6,13 +6,13 @@
 //
 // Needs a container runtime.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import path from "node:path";
 
 import { packageInstallCommand } from "../electron/package-install-command.mjs";
 
-const IMAGE = process.env.OMB_DEB_SMOKE_IMAGE || "ubuntu:24.04";
-const RUNTIME = process.env.OMB_DEB_SMOKE_RUNTIME || "docker";
+const IMAGE = process.env.OPENBOT_DEB_SMOKE_IMAGE || process.env.OMB_DEB_SMOKE_IMAGE || "ubuntu:24.04";
+const RUNTIME = process.env.OPENBOT_DEB_SMOKE_RUNTIME || process.env.OMB_DEB_SMOKE_RUNTIME || "docker";
 if (!["docker", "podman"].includes(RUNTIME)) throw new Error("unsupported container runtime");
 
 function fail(message) {
@@ -40,22 +40,33 @@ function inContainer(script, { expectFailure = false } = {}) {
         IMAGE,
         "/bin/bash", "-c", script,
       ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15 * 60 * 1000 },
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 },
     );
     if (expectFailure) fail("the command was expected to fail but succeeded");
     return output;
   } catch (error) {
     if (expectFailure) return String(error.stdout ?? "") + String(error.stderr ?? "");
-    console.error(String(error.stdout ?? ""));
-    console.error(String(error.stderr ?? ""));
-    throw error;
+    writeSync(2, `${tail(error.stdout)}\n${tail(error.stderr)}\n`);
+    fail(`the container exited with ${error.status ?? error.signal ?? error.code}`);
   }
 }
+
+function tail(text, lines = 200) {
+  return String(text ?? "").trimEnd().split("\n").slice(-lines).join("\n");
+}
+
+const diagnostics = [
+  "trap 'status=$?; if [ \"$status\" -ne 0 ]; then",
+  '  echo "--- /var/log/dpkg.log (tail) ---"; tail -n 40 /var/log/dpkg.log || true',
+  '  echo "--- /var/log/apt/term.log (tail) ---"; tail -n 80 /var/log/apt/term.log || true',
+  "fi; exit \"$status\"' EXIT",
+].join("\n");
 
 // Everything before the command under test is setup; `set -e` keeps a failed
 // setup from being read as a failed install.
 const prepare = [
   "set -e",
+  diagnostics,
   "apt-get update -qq",
   "apt-get install -y -qq sudo >/dev/null",
   `mkdir -p "$(dirname "${staged}")"`,
@@ -67,8 +78,8 @@ const installed = inContainer(
   [
     prepare,
     command,
-    'dpkg-query -W -f="INSTALLED=\\${Version} \\${db:Status-Abbrev}\\n" openmausbot',
-    'test -x /opt/OpenBot/openmausbot && echo "EXECUTABLE=yes"',
+    'dpkg-query -W -f="INSTALLED=\\${Version} \\${db:Status-Abbrev}\\n" openbot',
+    'test -x /opt/OpenBot/openbot && echo "EXECUTABLE=yes"',
   ].join("\n"),
 );
 

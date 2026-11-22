@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { containerInit, execUnderInit, UNDER_IMAGE_INIT } from "./container-init.ts";
 import { restartPolicy } from "./restart.ts";
 
 export function superviseServer(start: () => ChildProcess, options: { signals?: Pick<NodeJS.Process, "on" | "off">; now?: () => number } = {}): Promise<number> {
@@ -37,6 +38,11 @@ function isEntry(): boolean {
 }
 
 if (isEntry()) {
+  const init = containerInit();
+  if (init.line) console.warn(init.line);
+  if (init.exec) execUnderInit(init.exec);
+  delete process.env[UNDER_IMAGE_INIT];
+  delete process.env.OMB_UNDER_IMAGE_INIT;
   const server = join(dirname(fileURLToPath(import.meta.url)), "index.js");
   void superviseServer(() => spawn(process.execPath, [server], { stdio: "inherit" })).then((code) => { process.exitCode = code; });
 }

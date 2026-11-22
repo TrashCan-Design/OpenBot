@@ -114,7 +114,7 @@ export function createAutomationReports(deps: AutomationReportDeps) {
 
   const lineOf = (run: RoutineRun, extra: Pick<AutomationLine, "needsYou" | "failed" | "recovered" | "copyOf">): AutomationLine => ({
     routineId: run.routineId, runId: run.id, name: run.routineName, trigger: run.eventSource ?? run.triggerSource ?? (run.manual ? "manual" : "schedule"),
-    executionThreadId: run.threadId!, scheduledFor: run.scheduledFor, ...extra,
+    executionThreadId: run.threadId ?? "", scheduledFor: run.scheduledFor, ...extra,
   });
 
   /** The reply a run ends with: its last turn's last text, or after a restart the last line of the last turn that
@@ -132,7 +132,7 @@ export function createAutomationReports(deps: AutomationReportDeps) {
   const sentWith = (run: RoutineRun, reply: Message | undefined): NonNullable<Message["attachments"]> => {
     if (!reply) return [];
     const turn = turnOfLine(reply);
-    const lines = turn ? store.activePath(run.threadId!).filter((message) => saidLine(message) && turnOfLine(message) === turn) : [reply];
+    const lines = turn && run.threadId ? store.activePath(run.threadId).filter((message) => saidLine(message) && turnOfLine(message) === turn) : [reply];
     return lines.flatMap((message) => message.attachments ?? []).filter((file) => file.kind !== "image" || !file.fromTool);
   };
 

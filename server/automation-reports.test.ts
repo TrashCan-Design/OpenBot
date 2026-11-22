@@ -638,4 +638,14 @@ describe("automation reports", () => {
     reports.flush();
     expect(f.lines().map((line: Message) => line.text)).toEqual(["Acme replied."]);
   });
+
+  it("safely handles a pending run without a threadId", () => {
+    const f = fixture();
+    const run = f.finished(null, "Detached brief", { status: "failed", threadId: undefined, error: "Detached run failed" });
+    f.runs.get(run.id)!.report = { state: "pending" };
+    const reports = f.create();
+    expect(() => reports.flush()).not.toThrow();
+    const line = f.lines().find((msg: Message) => msg.automation?.runId === run.id);
+    expect(line?.automation?.executionThreadId).toBe("");
+  });
 });

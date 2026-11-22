@@ -2,7 +2,9 @@
 // (a DNS-rebinding defence), so a device's request is replayed to 127.0.0.1
 // as this process, never with the device's Host or Origin.
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
+import type { Duplex, Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
+import { createGzip, type Gzip } from "node:zlib";
 
 import { bearerToken } from "./devices.ts";
 import {
@@ -16,7 +18,8 @@ import {
   isCloudDesktopAccess,
   isMessageFileDownload,
 } from "./routes.ts";
-import { sendTunnelJson } from "./tunnel-gzip.ts";
+import { createJsonScrubber } from "./json-scrub.ts";
+import { acceptsGzip, gzipCandidate, sendTunnelJson, varyOnEncoding } from "./tunnel-gzip.ts";
 import { CompanionViewerRelay, requestTarget } from "./viewer-relay.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -32,7 +35,8 @@ export interface ProxyOptions {
     code: string,
     deviceName: unknown,
     pairRequestId?: unknown,
-  ) => { token: string; device: unknown } | { error: string };
+    replacesToken?: unknown,
+  ) => { token: string; device: unknown } | { error: string; code?: string };
   serverName: () => string;
   /** Every host the phone could dial later, best first, sent with the pairing
    * response as an advisory fallback list. */
@@ -43,6 +47,8 @@ export interface ProxyOptions {
    * it synchronously on revoke; the returned disposer is called exactly once. */
   connected?: (deviceId: string, disconnect: () => void) => () => void;
   headersTimeoutMs?: number;
+  /** Tests only: a lower whole-body ceiling, so a reply past it need not be tens of MiB. */
+  wholeJsonBodyBytes?: number;
 }
 
 export interface CompanionEndpointSnapshot {
@@ -63,7 +69,7 @@ export function proxyHeadersTimeoutMs(url: string, override?: number): number {
     ?? (PHONE_SECRET_PROVIDE_PATH.test(url) ? PHONE_SECRET_HEADERS_TIMEOUT_MS : HEADERS_TIMEOUT_MS);
 }
 
-const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+const WHOLE_JSON_BODY_BYTES = 32 * 1024 * 1024;
 
 /** Bounded: an unbounded read on an unauthenticated route is a
  * memory-exhaustion vector. */
@@ -122,6 +128,92 @@ const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, { ...headers, "content-length": Buffer.byteLength(text) });
   res.end(text);
 };
+
+/** Writes to a device and holds `source` back until that write has reached the socket. Paced by the write's own
+ * callback, not the response's 'drain': on Node 24 on Linux a chunked response that wrote a large piece can finish
+ * flushing with `writableNeedDrain` still set and never emit 'drain', which left the reply stalled for good. */
+function toDevice(res: ServerResponse, data: string | Buffer, source: Readable): void {
+  let held = false;
+  held = !res.write(data, () => {
+    if (held) source.resume();
+  });
+  if (held) source.pause();
+}
+
+/** A JSON reply past the whole-body ceiling, scrubbed as it streams. Bytes that were never JSON go on verbatim, as a
+ * small body's do; a body that stops being JSON after its start is out can only be cut off. */
+function streamScrubbedJson(harness: IncomingMessage, res: ServerResponse, held: Buffer[]): void {
+  const status = harness.statusCode ?? 200;
+  const scrubber = createJsonScrubber();
+  const decoder = new StringDecoder("utf8");
+  const head = Buffer.concat(held);
+  let first: string;
+  try {
+    first = scrubber.write(decoder.write(head));
+  } catch {
+    res.writeHead(status, privateHeaders(harness.headers));
+    toDevice(res, head, harness);
+    harness.on("data", (chunk: Buffer) => toDevice(res, chunk, harness));
+    harness.on("end", () => res.end());
+    return;
+  }
+  const headers = { ...harness.headers };
+  delete headers["content-length"];
+  delete headers["content-encoding"];
+  delete headers["transfer-encoding"];
+  const reply = privateHeaders(headers);
+  let zip: Gzip | null = null;
+  // A phone tunnel gzips a whole JSON reply; this one is gzipped as it goes.
+  if (gzipCandidate(res, status, reply, first)) {
+    const vary = varyOnEncoding(reply.vary ?? res.getHeader("vary"));
+    if (acceptsGzip(res.req.headers["accept-encoding"])) {
+      res.writeHead(status, { ...reply, vary, "content-encoding": "gzip" });
+      zip = createGzip();
+      const gzipped = zip;
+      gzipped.on("data", (chunk: Buffer) => toDevice(res, chunk, gzipped));
+      gzipped.on("end", () => res.end());
+      gzipped.on("error", () => res.destroy());
+      // zlib's own 'drain' is an ordinary stream's, and it holds the harness back while it compresses.
+      gzipped.on("drain", () => harness.resume());
+    } else {
+      res.writeHead(status, { ...reply, vary });
+    }
+  } else {
+    res.writeHead(status, reply);
+  }
+  const send = (text: string): void => {
+    if (!zip) toDevice(res, text, harness);
+    else if (!zip.write(text)) harness.pause();
+  };
+  const finish = (text: string): void => {
+    if (zip) zip.end(text);
+    else res.end(text);
+  };
+  const cut = (): void => {
+    harness.destroy();
+    zip?.destroy();
+    res.destroy();
+  };
+  send(first);
+  harness.on("data", (chunk: Buffer) => {
+    let text: string;
+    try {
+      text = scrubber.write(decoder.write(chunk));
+    } catch {
+      return cut();
+    }
+    if (text) send(text);
+  });
+  harness.on("end", () => {
+    let rest: string;
+    try {
+      rest = scrubber.write(decoder.end()) + scrubber.end();
+    } catch {
+      return cut();
+    }
+    finish(rest);
+  });
+}
 
 /** Validated and capped at the network boundary so no producer can publish an
  * extra field, a path-bearing URL or an unbounded list. */
@@ -330,8 +422,9 @@ export function createProxyHandler(options: ProxyOptions) {
             String(credential ?? ""),
             body.deviceName,
             body.pairRequestId,
+            body.replacesToken,
           );
-          if ("error" in result) return sendJson(res, 401, { error: result.error });
+          if ("error" in result) return sendJson(res, 401, { error: result.error, ...(result.code ? { code: result.code } : {}) });
           const hosts = options.hosts?.() ?? [];
           const endpoints = options.endpoints?.() ?? [];
           const response: typeof result & {
@@ -538,18 +631,23 @@ export function createProxyHandler(options: ProxyOptions) {
 
         const chunks: Buffer[] = [];
         let size = 0;
-        harness.on("data", (chunk: Buffer) => {
+        const hold = (chunk: Buffer) => {
           size += chunk.length;
-          if (size > MAX_JSON_BODY_BYTES) {
+          chunks.push(chunk);
+          if (size <= (options.wholeJsonBodyBytes ?? WHOLE_JSON_BODY_BYTES)) return;
+          harness.off("data", hold);
+          harness.off("end", finish);
+          // These two are rewritten or withdrawn whole, so neither can start before its end.
+          if (browserRequest || viewers.rewritesJoin(path)) {
             harness.destroy();
-            if (res.headersSent) res.destroy();
-            else sendJson(res, 502, { error: "the response from OpenBot was too large" });
+            sendJson(res, 502, { error: "the response from OpenBot was too large" });
             return;
           }
-          chunks.push(chunk);
-        });
+          streamScrubbedJson(harness, res, chunks);
+        };
+        harness.on("data", hold);
         harness.on("error", () => res.destroy());
-        harness.on("end", () => {
+        const finish = (): void => {
           const refusal = browserRefusal();
           if (refusal) return sendJson(res, refusal.status, { error: refusal.error });
           const body = Buffer.concat(chunks).toString("utf8");
@@ -581,7 +679,8 @@ export function createProxyHandler(options: ProxyOptions) {
             return;
           }
           forward(text, harness.headers, harness.statusCode ?? 200);
-        });
+        };
+        harness.on("end", finish);
 
         /** The body was re-serialised, so the harness's framing headers are
          * dropped: Node's parser rejects transfer-encoding alongside

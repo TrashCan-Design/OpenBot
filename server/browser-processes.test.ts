@@ -8,7 +8,17 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { browserProcessesRunning, browserProcessTree, orphanedBrowsers, releaseBrowserProfile, stopBrowserProcesses } from "./browser-processes.ts";
+import {
+  browserDaemonRuns,
+  browserProcessesRunning,
+  browserProcessTree,
+  daemonPaths,
+  environmentEntries,
+  isBrowserDaemon,
+  orphanedBrowsers,
+  releaseBrowserProfile,
+  stopBrowserProcesses,
+} from "./browser-processes.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 // The real tools, except where a test stands in for Windows' tasklist and taskkill.
@@ -244,6 +254,64 @@ describe("a browser on Windows", () => {
       expect(await browserProcessesRunning(tree)).toBe(false);
     } finally {
       holder.kill("SIGKILL");
+    }
+  });
+});
+
+describe("isBrowserDaemon verification", () => {
+  const paths = new Set(["/opt/agent-browser/bin", "/usr/local/bin/agent-browser"]);
+
+  it("accepts a matching binary command and environment with daemon and session vars", () => {
+    const env = new Map([["AGENT_BROWSER_DAEMON", "1"], ["AGENT_BROWSER_SESSION", "session-xyz"]]);
+    expect(isBrowserDaemon(paths, "/opt/agent-browser/bin", env, "session-xyz")).toBe(true);
+    expect(isBrowserDaemon(paths, "/usr/local/bin/agent-browser --daemon", env, "session-xyz")).toBe(true);
+  });
+
+  it("rejects mismatched command, missing environment, or wrong session", () => {
+    const env = new Map([["AGENT_BROWSER_DAEMON", "1"], ["AGENT_BROWSER_SESSION", "session-xyz"]]);
+    expect(isBrowserDaemon(paths, "/usr/bin/node", env, "session-xyz")).toBe(false);
+    expect(isBrowserDaemon(paths, null, env, "session-xyz")).toBe(false);
+    expect(isBrowserDaemon(paths, "/opt/agent-browser/bin", null, "session-xyz")).toBe(false);
+    expect(isBrowserDaemon(paths, "/opt/agent-browser/bin", env, "other-session")).toBe(false);
+    const wrongDaemonEnv = new Map([["AGENT_BROWSER_DAEMON", "0"], ["AGENT_BROWSER_SESSION", "session-xyz"]]);
+    expect(isBrowserDaemon(paths, "/opt/agent-browser/bin", wrongDaemonEnv, "session-xyz")).toBe(false);
+  });
+
+  it("parses environment entries correctly", () => {
+    const entries = ["AGENT_BROWSER_DAEMON=1", "AGENT_BROWSER_SESSION=sess_1", "PATH=/bin:/usr/bin", "INVALID_ENTRY"];
+    const parsed = environmentEntries(entries);
+    expect(parsed.get("AGENT_BROWSER_DAEMON")).toBe("1");
+    expect(parsed.get("AGENT_BROWSER_SESSION")).toBe("sess_1");
+    expect(parsed.get("PATH")).toBe("/bin:/usr/bin");
+    expect(parsed.has("INVALID_ENTRY")).toBe(false);
+  });
+
+  it("resolves daemon paths including realpath", () => {
+    const resolved = daemonPaths("/bin/sh");
+    expect(resolved.has("/bin/sh")).toBe(true);
+    expect(resolved.size).toBeGreaterThanOrEqual(1);
+  });
+
+  it("browserDaemonRuns verifies live daemon and rejects invalid PIDs or mismatched sessions", async () => {
+    expect(await browserDaemonRuns("/bin/sh", 0, "sess")).toBe(false);
+    expect(await browserDaemonRuns("/bin/sh", -1, "sess")).toBe(false);
+    expect(await browserDaemonRuns("/bin/sh", 1, "sess")).toBe(false);
+    expect(await browserDaemonRuns("/bin/sh", process.pid, "sess")).toBe(false);
+    expect(await browserDaemonRuns("/bin/sh", process.ppid, "sess")).toBe(false);
+
+    if (posix) {
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        env: { ...process.env, AGENT_BROWSER_DAEMON: "1", AGENT_BROWSER_SESSION: "test-sess-live" },
+        stdio: "ignore",
+      });
+      try {
+        const pid = child.pid!;
+        expect(await browserDaemonRuns(process.execPath, pid, "test-sess-live")).toBe(true);
+        expect(await browserDaemonRuns(process.execPath, pid, "wrong-sess")).toBe(false);
+        expect(await browserDaemonRuns("/nonexistent/bin", pid, "test-sess-live")).toBe(false);
+      } finally {
+        child.kill("SIGKILL");
+      }
     }
   });
 });

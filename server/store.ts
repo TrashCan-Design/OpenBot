@@ -41,6 +41,8 @@ import { parseConnectorTools } from "./connector-tools.ts";
 import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
 import { appsFromCreator } from "./inherited-apps.ts";
+import { repairLegacyWorkThreads } from "./legacy-work-threads.ts";
+import type { NewThreadLevel } from "./task-record.ts";
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
 export type {
   BotActivity, ConnectorCardData, GroupDefaultResponder, OptionCardData,
@@ -48,6 +50,7 @@ export type {
 } from "../shared/wire.ts";
 export type { GroupTask as GroupTaskRecord, BotProject as BotProjectRecord } from "../shared/wire.ts";
 export type { InstalledPlaybook, InstalledPackageMetadata, MausColor, MausExpression } from "../shared/wire.ts";
+export type { NewThreadLevel } from "./task-record.ts";
 
 export type Message = WireMessage & { /** The turn an attach_file line was sent in; never makes it that turn's reply. */ sentInTurn?: string };
 
@@ -345,7 +348,7 @@ export class Store {
       this.groups = [];
     }
     this.rememberSections([...this.bots, ...this.groups].map((record) => record.section));
-    let botsMigrated = false;
+    const legacyWork = repairLegacyWorkThreads(DATA_DIR, this.bots, botsLoaded || !existsSync(BOTS_FILE)); let botsMigrated = Boolean(legacyWork?.changed);
     const browserProfileAliases = loadBrowserProfileIdAliases();
     const chiefSectionsSeen = new Set<string>();
     let groupsMigrated = false;
@@ -534,16 +537,7 @@ export class Store {
         b.projects = b.projects.map(({ id, name, emoji }) => ({ id, name, ...(isProjectEmoji(emoji) ? { emoji } : {}) }));
         botsMigrated = true;
       }
-      if (!b.tasks?.length) {
-        b.tasks = [{
-          threadId: b.threadId,
-          title: this.firstUserLine(b.threadId) ?? UNTITLED_TASK,
-          createdAt: b.createdAt,
-          updatedAt: b.createdAt,
-          resumeCursors: b.resumeCursors ?? {},
-        }];
-        botsMigrated = true;
-      }
+      b.tasks ??= [];
       let active = b.tasks.find((task) => task.threadId === b.threadId);
       if (!active) {
         active = {
@@ -596,6 +590,7 @@ export class Store {
       b.unread = b.tasks.some(taskCountsAsBotUnread);
     }
     if (botsMigrated) this.saveBots();
+    legacyWork?.done();
     if (clearModelCopies) writeFileAtomic(THREAD_MODEL_COPIES_CLEARED, "Threads follow their bot's model; the copies older builds made are cleared.\n", { mode: 0o600 });
     const knownThreads = new Set([
       ...this.bots.flatMap((b) => [b.threadId, ...(b.tasks ?? []).map((task) => task.threadId)]),
@@ -2187,12 +2182,13 @@ export class Store {
     bot.pinnedMessageId = task.pinnedMessageId;
   }
 
-  createTask(botId: string, title?: string, activate = true, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
-    modelSelection?: ModelSelection, cwd?: string): TaskRecord | null {
+  createTask(botId: string, title?: string, activate = true, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: NewThreadLevel,
+    modelSelection?: ModelSelection, cwd?: string, beforeShown?: (task: TaskRecord) => void): TaskRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
     if (projectId !== undefined && !this.project(botId, projectId)) return null;
     const task = this.buildTask(bot, title, projectId, openedBy, approvalMode, modelSelection, cwd);
+    beforeShown?.(task);
     this.commitBotChange(bot, "the new thread", () => {
       bot.tasks = [task, ...(bot.tasks ?? [])];
       if (activate) this.mirrorActiveTask(bot, task);
@@ -2201,7 +2197,12 @@ export class Store {
     return task;
   }
 
-  private buildTask(bot: BotRecord, title?: string, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
+  private botLevel(bot: BotRecord): Pick<TaskRecord, "approvalMode" | "autoApprove" | "alwaysAllow"> {
+    if (bot.approvalGrant && !bot.approvalGrant.threadOnly) return {};
+    return { approvalMode: approvalModeFor({ ...bot, approvalGrant: undefined }), autoApprove: Boolean(bot.autoApprove), alwaysAllow: [...(bot.alwaysAllow ?? [])] };
+  }
+
+  private buildTask(bot: BotRecord, title?: string, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: NewThreadLevel,
     modelSelection?: ModelSelection, cwd?: string): TaskRecord {
     const createdAt = Date.now();
     return {
@@ -2214,9 +2215,7 @@ export class Store {
       ...(openedBy ? { openedBy: structuredClone(openedBy) } : {}),
       resumeCursors: {},
       ...(modelSelection && !sameModelSelection(modelSelection, bot.modelSelection) ? { modelSelection: structuredClone(modelSelection) } : {}),
-      approvalMode: approvalMode ?? approvalModeFor(bot),
-      autoApprove: approvalMode ? false : Boolean(bot.autoApprove),
-      alwaysAllow: approvalMode ? [] : [...(bot.alwaysAllow ?? [])],
+      ...(typeof approvalMode === "string" ? { approvalMode, autoApprove: false, alwaysAllow: [] } : approvalMode ? { approvalMode: approvalMode.from, autoApprove: approvalMode.from === "auto", alwaysAllow: [...(bot.alwaysAllow ?? [])] } : this.botLevel(bot)),
       unread: false,
       activity: "idle",
       busy: false,

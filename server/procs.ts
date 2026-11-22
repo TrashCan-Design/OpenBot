@@ -9,13 +9,15 @@ import {
   type ExecFileOptions,
   type SpawnOptions,
 } from "node:child_process";
-import { closeSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { botBox, type WrappedSpawn } from "./bot-box/box.ts";
-import type { BoxRequest } from "./bot-box/plan.ts";
+import { type BoxRequest, under } from "./bot-box/plan.ts";
+import { homeProgramsDistrusted, serverMayRunFrom, serverPath } from "./bot-box/program-trust.ts";
 import { engineMemory } from "./engine-memory.ts";
 import { engineHomes } from "./engine-homes/engine-homes.ts";
+import { currentTurn } from "./crash-guard.ts";
 import type { HomedSpawn } from "./engine-homes/layout.ts";
 import { resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
 import { spawnBotWork } from "./oom-score.ts";
@@ -113,6 +115,24 @@ function linuxDescendantsStopped(child: ChildProcess): boolean {
   return true;
 }
 
+/** Whether every process still in this group has exited and only waits to be collected. Where nothing collects orphans
+ * (Node as a container's process 1) such members stay for good, and kill(-pgid, 0) goes on succeeding for them. False
+ * when a member runs, when none is found, or when /proc can't say. */
+export function linuxGroupOnlyExited(group: number, list: () => string[] = () => readdirSync("/proc"), stat: (pid: number) => string = (pid) => readFileSync(`/proc/${pid}/stat`, "utf8")): boolean {
+  let entries: string[];
+  try { entries = list(); } catch { return false; }
+  let members = 0;
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let fields: string[];
+    try { const text = stat(Number(entry)); fields = text.slice(text.lastIndexOf(")") + 2).split(" "); } catch { continue; }
+    if (Number(fields[2]) !== group) continue;
+    if (fields[0] !== "Z" && fields[0] !== "X") return false;
+    members += 1;
+  }
+  return members > 0;
+}
+
 function linuxRootIdentityMatches(child: ChildProcess): boolean | undefined {
   const start = child.pid && linuxTrees.get(child)?.get(child.pid);
   if (!child.pid || process.platform !== "linux" || !cliGroups.has(child)) return true;
@@ -154,8 +174,8 @@ function rememberEngineSession(child: ChildProcess): void {
 }
 
 /** `bot`: an engine running bots' turns, whose own servers that bot's browser may open on a server host.
- * `openmausbot`: everything else (logins, probes, the browser engine itself). */
-export type CliOwner = "bot" | "openmausbot";
+ * `openbot`: everything else (logins, probes, the browser engine itself). */
+export type CliOwner = "bot" | "openbot" | "openmausbot";
 
 /** The bot box (server/bot-box): a `bot` spawn runs in it where it is on; `box` asks for one for another owner, with more
  * paths or the host's network, and `false` keeps a spawn out of it. */
@@ -169,26 +189,66 @@ export interface BoxSpawnOptions {
 }
 export type CliSpawnOptions = SpawnOptions & BoxSpawnOptions;
 
+/** The turn (crash-guard.ts) of a spawn working outside its bot's folders (a configured project folder, which may be in
+ * another bot's folder), so its box gets that bot's own folder and conversation folder too. A conversation folder and a
+ * bot's folder itself (a room's turn) already say whose they are. */
+function projectFolderTurn(cwd: string | undefined): { botId: string; conversationFolder: string } | null {
+  const dataDir = botBox.startOptions()?.dataDir, turn = currentTurn();
+  if (!cwd || !dataDir || !turn?.botId) return null;
+  const full = resolve(cwd), workspaces = join(resolve(dataDir), "workspaces"), conversations = join(resolve(dataDir), "task-workspaces");
+  if (under(full, conversations) || dirname(full) === workspaces || full === workspaces) return null;
+  return { botId: turn.botId, conversationFolder: join(conversations, turn.botId, turn.threadId) };
+}
+
+export function sharedBoxScope(cwd: string): string | null {
+  if (!botBox.enabled()) return null;
+  const parent = dirname(resolve(cwd));
+  if (basename(dirname(parent)) !== "task-workspaces") {
+    // Another bot's turn in the same project folder has that bot's folder in its box, so it never shares this process.
+    const turn = projectFolderTurn(cwd);
+    return turn ? `${resolve(cwd)}#${turn.botId}` : resolve(cwd);
+  }
+  return parent;
+}
+
+/** Security (bot-box/program-trust.ts): a spawn outside the box neither starts a program from a folder a boxed bot can
+ * write nor looks one up there. */
+export function outsideBoxOptions<T extends { env?: NodeJS.ProcessEnv; cwd?: string | URL }>(command: string, opts: T): T {
+  if (!homeProgramsDistrusted()) return opts;
+  if (/[/\\]/.test(command)) {
+    const path = resolve(typeof opts.cwd === "string" ? opts.cwd : process.cwd(), command);
+    let real = path;
+    try { real = realpathSync(path); } catch {}
+    if (!serverMayRunFrom(path) || !serverMayRunFrom(real)) {
+      throw Object.assign(new Error(`${command} is in a folder the bots can write, so the server does not run it outside the bot box.`), { code: "EACCES" });
+    }
+  }
+  const env = opts.env ?? process.env;
+  return { ...opts, env: { ...env, PATH: serverPath(env.PATH) } };
+}
+
 /** The box for this spawn, or null when it runs as is. A spawn in an engine home has that home in place of HOME. */
 export function boxedSpawn(resolved: ResolvedSpawn, opts: CliSpawnOptions, owner: CliOwner, homed: HomedSpawn | null = null): WrappedSpawn | null {
   if (opts.box === false || (owner !== "bot" && !opts.box)) return null;
   const request = typeof opts.box === "object" ? opts.box : {};
   const home = homed ? { home: homed.home, shared: homed.shared } : {};
-  return botBox.wrap({ command: resolved.command, args: resolved.args, cwd: typeof opts.cwd === "string" ? opts.cwd : undefined, env: opts.env ?? process.env, ...request, ...home });
+  const cwd = typeof opts.cwd === "string" ? opts.cwd : undefined;
+  const turn = projectFolderTurn(cwd);
+  return botBox.wrap({ command: resolved.command, args: resolved.args, cwd, env: opts.env ?? process.env, ...turn, ...request, ...home });
 }
 
 export function spawnCli(
   cli: string,
   args: string[],
   opts: CliSpawnOptions,
-  owner: CliOwner = "openmausbot",
+  owner: CliOwner = "openbot",
 ): ChildProcessByStdio<Writable, Readable, Readable> {
   const resolved = resolveCli(cli, args);
   assertSafeCliArgv(resolved);
   const homed = owner === "bot" || opts.engineHome ? engineHomes.forSpawn(opts.env ?? process.env) : null;
   const options: CliSpawnOptions = homed ? { ...opts, env: homed.env } : opts;
   const boxed = boxedSpawn(resolved, options, owner, homed);
-  const { box: _box, engineHome: _engineHome, botWork, ...spawnOpts } = options;
+  const { box: _box, engineHome: _engineHome, botWork, ...spawnOpts } = boxed ? options : outsideBoxOptions(resolved.command, options);
   // The box's extra descriptors (its seccomp filter) follow stdio; only a plain three-entry stdio can take them.
   const stdio = boxed?.extraFds.length && Array.isArray(spawnOpts.stdio) && spawnOpts.stdio.length === 3 ? [...spawnOpts.stdio, ...boxed.extraFds] : spawnOpts.stdio;
   const start = () => spawn(boxed?.command ?? resolved.command, boxed?.args ?? resolved.args, {
@@ -235,6 +295,7 @@ export function execCli(
   const resolved = resolveCli(cli, args);
   try {
     assertSafeCliArgv(resolved);
+    opts = outsideBoxOptions(resolved.command, opts);
   } catch (error) {
     queueMicrotask(() => cb(error instanceof Error ? error : new Error(String(error)), "", ""));
     return;
@@ -310,7 +371,7 @@ async function stopCliTree(child: ChildProcess, pid: number, timeoutMs: number):
       if (linuxRootIdentityMatches(child) === undefined) return false;
       try {
         process.kill(-pid, 0);
-        return false;
+        return process.platform === "linux" && linuxGroupOnlyExited(pid);
       } catch (error) {
         // EPERM and other failures do not prove that the group is gone.
         return (error as NodeJS.ErrnoException).code === "ESRCH";
@@ -413,6 +474,6 @@ export async function waitForExit(child: ChildProcess, ms: number): Promise<bool
 export function brokerSocketPath(dataDir: string, tag: string): string {
   return process.platform === "win32"
     // Named pipes share a global namespace that DATA_DIR cannot isolate.
-    ? `\\\\.\\pipe\\openmausbot-perm-${process.pid}-${tag}`
+    ? `\\\\.\\pipe\\openbot-perm-${process.pid}-${tag}`
     : join(dataDir, `perm-${tag}.sock`);
 }

@@ -23,7 +23,7 @@ object SharePolicy {
     const val MAXIMUM_ITEMS = 4
     const val MAXIMUM_TEXT_CHARACTERS = 100_000
     const val MAXIMUM_INSTRUCTION_CHARACTERS = 20_000
-    const val MAXIMUM_TOTAL_ATTACHMENT_BYTES = 50 * 1_024 * 1_024
+    const val MAXIMUM_TOTAL_ATTACHMENT_BYTES = 100 * 1_024 * 1_024
     const val MAXIMUM_IMAGE_BYTES = 10 * 1_024 * 1_024
     const val MAXIMUM_FILE_BYTES = CompanionClient.SHARE_FILE_MAX_BYTES
     const val MAXIMUM_URL_BYTES = 8_192
@@ -41,6 +41,11 @@ object SharePolicy {
         "application/vnd.oasis.opendocument.text",
         "application/vnd.oasis.opendocument.spreadsheet",
         "application/vnd.oasis.opendocument.presentation",
+        "application/zip", "application/x-zip-compressed",
+        "application/x-tar", "application/tar",
+        "application/gzip", "application/x-gzip",
+        "application/x-7z-compressed",
+        "application/vnd.rar", "application/x-rar-compressed",
     )
 
     enum class StreamKind { IMAGE, FILE, URL, TEXT, IGNORE }
@@ -107,6 +112,11 @@ object SharePolicy {
         "odt" -> "application/vnd.oasis.opendocument.text"
         "ods" -> "application/vnd.oasis.opendocument.spreadsheet"
         "odp" -> "application/vnd.oasis.opendocument.presentation"
+        "zip" -> "application/zip"
+        "gz", "gzip" -> "application/gzip"
+        "tar" -> "application/x-tar"
+        "7z" -> "application/x-7z-compressed"
+        "rar" -> "application/vnd.rar"
         else -> null
     }
 

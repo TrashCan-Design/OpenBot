@@ -1,4 +1,5 @@
 import { chmod, lstat, readFile, readdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
 import {
@@ -56,6 +57,12 @@ async function validateCloudflared(resources, platform, required) {
   if (!allowed?.has(target)) {
     throw new Error(`Packaged ${platform} app contains the wrong cloudflared target: ${target}`);
   }
+  // A freshly copied binary can miss the 10 s version check while macOS assesses
+  // it for the first time. One long-timeout run here absorbs that delay; the
+  // real check below stays unchanged.
+  if (target === `${process.platform}-${process.arch}`) {
+    spawnSync(executable, ["version"], { timeout: 30_000, stdio: "ignore" });
+  }
   verifyCloudflaredExecutable(executable, target);
 
   const licenses = path.join(resources, "licenses");
@@ -110,6 +117,19 @@ async function thinMacPlatformTools(resources, arch) {
 // unsafe for a root-owned executable path after DEB/AppImage installation, so
 // repair and revalidate the exact tree after resources are copied and before
 // either artifact target is assembled.
+export async function validateCuaWin(resources, required) {
+  const cuaDriver = path.join(resources, "cua-driver.exe");
+  const present = await lstat(cuaDriver).then(() => true, (error) => {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  });
+  if (!present && !required) return;
+  for (const binary of ["cua-driver.exe", "cua-driver-background.exe"]) {
+    await requireRegularFile(path.join(resources, binary), undefined);
+  }
+  await requireRealDirectory(path.join(resources, "cua-sdk"), undefined);
+}
+
 export default async function afterPack(context) {
   const resources = context.packager?.getResourcesDir?.(context.appOutDir) ?? (
     context.electronPlatformName === "darwin"
@@ -131,6 +151,11 @@ export default async function afterPack(context) {
   }
   await validateDuckdb(resources, context.electronPlatformName, arch, Boolean(context.packager));
   if (context.electronPlatformName === "darwin") await thinMacPlatformTools(resources, arch);
+
+  if (context.electronPlatformName === "win32") {
+    await validateCuaWin(resources, Boolean(context.packager));
+    return;
+  }
 
   if (context.electronPlatformName !== "linux") return;
 

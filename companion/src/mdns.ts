@@ -242,6 +242,8 @@ export interface ServiceInfo {
   name: string;
   /** e.g. "_openmausbot._tcp" */
   type: string;
+  /** aliases to advertise alongside type, e.g. ["_openmausbot._tcp"] */
+  aliases?: string[];
   port: number;
   /** the name our A records claim, e.g. "openmausbot-1a2b3c4d.local" */
   host: string;
@@ -284,9 +286,18 @@ export function serviceRecords(service: ServiceInfo) {
   };
 }
 
+function allServices(service: ServiceInfo): ServiceInfo[] {
+  if (!service.aliases?.length) return [service];
+  return [service, ...service.aliases.map((alias) => ({ ...service, type: alias, aliases: undefined }))];
+}
+
 export function announcement(service: ServiceInfo): ResourceRecord[] {
-  const { ptr, srv, txt, addresses } = serviceRecords(service);
-  return [ptr, srv, txt, ...addresses];
+  const records: ResourceRecord[] = [];
+  for (const s of allServices(service)) {
+    const { ptr, srv, txt, addresses } = serviceRecords(s);
+    records.push(ptr, srv, txt, ...addresses);
+  }
+  return dedupe(records);
 }
 
 /** A PTR question is answered with SRV, TXT and A in the additional section
@@ -296,27 +307,30 @@ export function answersFor(
   service: ServiceInfo,
 ): { answers: ResourceRecord[]; additionals: ResourceRecord[] } {
   if (message.response) return { answers: [], additionals: [] };
-  const { serviceName, instance, ptr, srv, txt, addresses } = serviceRecords(service);
+  const all = allServices(service);
   const answers: ResourceRecord[] = [];
   const additionals: ResourceRecord[] = [];
 
-  for (const question of message.questions) {
-    const name = question.name.toLowerCase();
-    const asks = (type: number) => question.type === type || question.type === TYPE.ANY;
+  for (const s of all) {
+    const { serviceName, instance, ptr, srv, txt, addresses } = serviceRecords(s);
+    for (const question of message.questions) {
+      const name = question.name.toLowerCase();
+      const asks = (type: number) => question.type === type || question.type === TYPE.ANY;
 
-    if (name === SERVICE_ENUMERATION && asks(TYPE.PTR)) {
-      answers.push({ name: SERVICE_ENUMERATION, type: TYPE.PTR, data: serviceName });
-    } else if (name === serviceName.toLowerCase() && asks(TYPE.PTR)) {
-      answers.push(ptr);
-      additionals.push(srv, txt, ...addresses);
-    } else if (name === instance.toLowerCase()) {
-      if (asks(TYPE.SRV)) {
-        answers.push(srv);
-        additionals.push(...addresses);
+      if (name === SERVICE_ENUMERATION && asks(TYPE.PTR)) {
+        answers.push({ name: SERVICE_ENUMERATION, type: TYPE.PTR, data: serviceName });
+      } else if (name === serviceName.toLowerCase() && asks(TYPE.PTR)) {
+        answers.push(ptr);
+        additionals.push(srv, txt, ...addresses);
+      } else if (name === instance.toLowerCase()) {
+        if (asks(TYPE.SRV)) {
+          answers.push(srv);
+          additionals.push(...addresses);
+        }
+        if (asks(TYPE.TXT)) answers.push(txt);
+      } else if (name === s.host.toLowerCase() && asks(TYPE.A)) {
+        answers.push(...addresses);
       }
-      if (asks(TYPE.TXT)) answers.push(txt);
-    } else if (name === service.host.toLowerCase() && asks(TYPE.A)) {
-      answers.push(...addresses);
     }
   }
 

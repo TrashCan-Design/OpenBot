@@ -37,7 +37,7 @@ export function createServerSupervisor({
     log(`server recovery attempt ${attempts}/${retryDelaysMs.length} in ${delay}ms`);
     timer = setTimeout(async () => {
       timer = null;
-      if (paused) return;
+      if (stopped || paused) return;
       let result;
       try {
         result = await restart();
@@ -46,7 +46,10 @@ export function createServerSupervisor({
         // A thrown start with a still-owned child is not permission to fork a sibling.
         result = { abort: current !== null };
       }
-      if (stopped || paused) return;
+      if (stopped || paused) {
+        if (result?.proc) void stop(result.proc);
+        return;
+      }
       if (result?.proc && ready(result.proc)) return;
       if (result?.abort) onExhausted();
       else schedule();

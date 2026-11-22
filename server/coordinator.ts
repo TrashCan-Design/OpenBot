@@ -2,6 +2,8 @@ import { RuntimeCoordinator } from "./runtime-coordinator.ts";
 import type { WorkOrigin } from "./peer-provenance.ts";
 import type { LegacyThreadResolver } from "./runtime/import-legacy.ts";
 import type { Answerer, Assignment, EnvelopeNames, Level, Limits, Mode, Origin, Outcome, Owner, Reply, Requester, StatusView, TurnEvidence } from "./runtime/types.ts";
+import type { ModelSelection } from "../shared/wire.ts";
+import type { NewThreadLevel } from "./task-record.ts";
 
 /** One coordinate_bots call, as the internal route hands it to the server. */
 export type CoordinateBotsCall = {
@@ -21,6 +23,7 @@ export type CoordinateBotsCall = {
   projectId?: string;
   /** The assignment whose question the message answers, instead of new work. */
   answers?: string;
+  ownThread?: { modelSelection?: ModelSelection; approvalMode?: NewThreadLevel };
 };
 
 export type { LegacyThreadResolver };

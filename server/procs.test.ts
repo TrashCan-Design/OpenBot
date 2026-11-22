@@ -12,6 +12,7 @@ import {
   estimatedWindowsCommandLineChars,
   execCli,
   killCliTree,
+  linuxGroupOnlyExited,
   spawnCli,
   WINDOWS_SAFE_COMMAND_LINE_CHARS,
 } from "./procs.ts";
@@ -121,4 +122,36 @@ describe("CLI version probes", () => {
     expect(read(trapped, "")).toEqual({ version: "2.1.302" });
     expect(read(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }), "")).toEqual({ reason: "`claude` CLI not found" });
   }, hostTimeout(20_000));
+});
+
+describe("linuxGroupOnlyExited", () => {
+  it("returns true when every process in the group is in zombie state", () => {
+    const list = () => ["100", "101", "102"];
+    const stat = (pid: number) => {
+      if (pid === 100) return "100 (node) Z 1 500";
+      if (pid === 101) return "101 (sh) X 1 500";
+      return "102 (other) S 1 999";
+    };
+    expect(linuxGroupOnlyExited(500, list, stat)).toBe(true);
+  });
+
+  it("returns false when any process in the group is still running", () => {
+    const list = () => ["100", "101"];
+    const stat = (pid: number) => {
+      if (pid === 100) return "100 (node) Z 1 500";
+      return "101 (sh) S 1 500";
+    };
+    expect(linuxGroupOnlyExited(500, list, stat)).toBe(false);
+  });
+
+  it("returns false when no process belongs to the group", () => {
+    const list = () => ["100", "101"];
+    const stat = (_pid: number) => `100 (node) Z 1 999`;
+    expect(linuxGroupOnlyExited(500, list, stat)).toBe(false);
+  });
+
+  it("returns false when /proc fails to read", () => {
+    const list = () => { throw new Error("EACCES"); };
+    expect(linuxGroupOnlyExited(500, list)).toBe(false);
+  });
 });

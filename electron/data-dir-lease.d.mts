@@ -19,7 +19,7 @@ export declare class DataDirLeaseError extends Error {
 
 export declare function acquireDataDirLease(
   dataDir: string,
-  options?: { legacyDataDir?: string },
+  options?: { legacyDataDir?: string; guardDelegatedChild?: boolean; t?: (key: string, values?: Record<string, unknown>) => string },
 ): OwnedDataDirLease;
 
 export declare function acquireDataDirLeaseForProcess(
@@ -30,3 +30,15 @@ export declare function acquireDataDirLeaseForProcess(
 export declare function clearRecordsFromOtherMachines(
   dataDir: string,
 ): { path: string; host: string; pid: number }[];
+
+export declare function clearRecordsFromEarlierRunOfThisContainer(
+  dataDir: string,
+): { path: string; host: string; pid: number }[];
+
+export declare function macMountIsLocal(dfOutput: string, mountTable: string): boolean;
+
+export declare function inMacSyncedFolder(path: string, home: string): boolean;
+
+export declare function tasklistListsPid(output: string): boolean | null;
+
+export declare function windowsCreationFitsLease(createdMs: number | null, leaseCreatedAt: number): boolean;

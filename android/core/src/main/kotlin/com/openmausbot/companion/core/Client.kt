@@ -1289,6 +1289,7 @@ class CompanionClient(
             credential: String,
             deviceName: String,
             pairRequestId: String? = null,
+            replacesToken: String? = null,
             client: OkHttpClient = OkHttpClient(),
         ): PairResponse {
             val field = if (credential.length == 6 && credential.all { it in '0'..'9' }) {
@@ -1301,6 +1302,7 @@ class CompanionClient(
                 add(field to credential)
                 add("deviceName" to deviceName)
                 pairRequestId?.let { add("pairRequestId" to it) }
+                replacesToken?.let { add("replacesToken" to it) }
             }
             val pairClient = client.newBuilder()
                 .dns(companion.endpoint?.dns ?: client.dns)
@@ -1347,6 +1349,7 @@ class CompanionClient(
             credential: String,
             deviceName: String,
             pairRequestId: String = UUID.randomUUID().toString(),
+            replacesToken: String? = null,
             client: OkHttpClient = OkHttpClient(),
         ): PairingOutcome {
             val endpoints = connection.pairingEndpoints
@@ -1366,6 +1369,7 @@ class CompanionClient(
                         credential = credential,
                         deviceName = deviceName,
                         pairRequestId = pairRequestId,
+                        replacesToken = replacesToken,
                         client = client,
                     )
                     return PairingOutcome(response, winner)

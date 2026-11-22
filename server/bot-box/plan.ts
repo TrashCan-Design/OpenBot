@@ -16,6 +16,7 @@
 //   - a network namespace with loopback only. Two loopback ports inside are bridged to unix sockets bound in from outside:
 //     the egress gate (every connection to the internet goes through it) and the harness gate (only /api/internal/
 //     routes of this server). Nothing else on the server's loopback is reachable.
+import { statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type BoxNet = "isolated" | "shared";
@@ -66,6 +67,10 @@ export interface BoxRequest {
   net?: BoxNet;
   /** The bot whose own folder (workspaces/<bot>) is put back; derived from a task-workspace cwd when absent. */
   botId?: string;
+  /** With `botId`, for a turn working outside its conversation's folder (a configured project folder): that folder
+   * (task-workspaces/<botId>/<thread>, its handed-off files), put back read-write where it exists. */
+  conversationFolder?: string;
+  botThreads?: boolean;
   /** A Team Cloud audience's engine home, bound read-write in place of the server's HOME, none of which the box then has. */
   home?: string;
   /** Files bound read-write over their names in `home`: the team's engine sign-ins. */
@@ -114,6 +119,17 @@ export const PATH_ENV_NAMES = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HO
 
 /** Folders the box always has its own copy of, so no setting may put the host's back. */
 const PRIVATE_INSIDE = ["/tmp", "/var/tmp", "/run", "/dev", "/proc"];
+
+function assertReadOnlySource(source: string): void {
+  try {
+    const stat = statSync(source);
+    if (stat.isFile() && stat.nlink > 1) {
+      throw new Error(`The bot box refuses a multiply-linked read-only file: ${source}; grant a separate single-link copy instead.`);
+    }
+  } catch (error) {
+    if (!["ENOENT", "EACCES", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+}
 
 export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
   const mutate = setup.mutate ?? new Set<BoxMutation>();
@@ -179,6 +195,12 @@ export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
     if (value && isAbsolute(value) && !covered(resolve(value)) && !PRIVATE_INSIDE.some((base) => under(resolve(value), base))) rw(resolve(value));
   }
   for (const path of request.rw ?? []) if (!covered(resolve(path))) rw(resolve(path));
+  // Security: only a conversation folder of this box's own bot, and never in a process other conversations share.
+  const conversation = request.conversationFolder && !request.botThreads ? resolve(request.conversationFolder) : null;
+  if (conversation && botId && ID.test(botId) && taskWorkspaceIds(conversation, dataDir)?.botId === botId && !covered(conversation)) {
+    mounts.push({ kind: "bind", source: conversation, target: conversation, optional: true });
+    if (!writable.includes(conversation)) writable.push(conversation);
+  }
   if (ownHome) {
     for (const file of request.shared ?? []) {
       if (under(resolve(file.target), ownHome)) mounts.push({ kind: "bind", source: resolve(file.source), target: resolve(file.target), optional: true });
@@ -189,11 +211,14 @@ export function planBox(setup: BoxSetup, request: BoxRequest): BoxPlan {
     const engines = resolve(root);
     mounts.push({ kind: mutate.has("engines-rw") ? "bind" : "ro", source: engines, target: engines, optional: true });
   }
+  const named = new Set((request.ro ?? []).map((path) => resolve(path)));
+  if (botId && ID.test(botId)) named.add(join(dataDir, "bots", botId, "SOUL.md"));
   const readOnly = new Set<string>();
   for (const path of [...(request.ro ?? []), ...argvPaths(request.args), ...(botId && ID.test(botId) ? [join(dataDir, "bots", botId, "SOUL.md")] : [])]) {
     const full = resolve(path);
+    if (request.ro?.includes(path)) assertReadOnlySource(full);
     // Code and the system are already there; a file under HOME or /tmp the command line names is put back read-only.
-    if (covered(full) || readOnly.has(full)) continue;
+    if ((!named.has(full) && covered(full)) || readOnly.has(full)) continue;
     if (["/usr", "/etc", "/opt", "/var/lib", ...setup.codeRoots, ...setup.engineRoots].some((base) => under(full, resolve(base)))) continue;
     readOnly.add(full);
     mounts.push({ kind: "ro", source: full, target: full, optional: true });
@@ -216,7 +241,7 @@ export function bwrapArgs(plan: BoxPlan): string[] {
   const args: string[] = [];
   for (const mount of plan.mounts) {
     switch (mount.kind) {
-      case "ro": args.push(mount.optional ? "--ro-bind-try" : "--ro-bind", mount.source, mount.target); break;
+      case "ro": assertReadOnlySource(mount.source); args.push(mount.optional ? "--ro-bind-try" : "--ro-bind", mount.source, mount.target); break;
       case "bind": args.push(mount.optional ? "--bind-try" : "--bind", mount.source, mount.target); break;
       case "tmpfs": args.push("--tmpfs", mount.target); break;
       case "proc": args.push("--proc", mount.target); break;

@@ -425,9 +425,9 @@ describe("readSafeLogTail", () => {
 });
 
 describe("diagnosticsFileName", () => {
-  it("uses openmausbot-diagnostics-YYYYMMDD-HHmmss.txt", () => {
+  it("uses openbot-diagnostics-YYYYMMDD-HHmmss.txt", () => {
     expect(diagnosticsFileName(new Date(2026, 7, 22, 16, 5, 9))).toBe(
-      "openmausbot-diagnostics-20260822-160509.txt",
+      "openbot-diagnostics-20260822-160509.txt",
     );
   });
 });

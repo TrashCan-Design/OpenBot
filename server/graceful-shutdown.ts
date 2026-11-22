@@ -4,11 +4,14 @@ export interface GracefulShutdownOptions {
   timeoutMs?: number;
 }
 
+/** Above the engines' kill path and browsers' close: below the desktop app's wait for the server and Docker's 10 s stop timeout. */
+export const SHUTDOWN_DEADLINE_MS = 8_000;
+
 /** A wedged provider cannot keep the child alive, and a normal stop clears browser capabilities so no turn bearer outlives it. */
 export function createGracefulShutdown({
   cleanup,
   exit,
-  timeoutMs = 6_000,
+  timeoutMs = SHUTDOWN_DEADLINE_MS,
 }: GracefulShutdownOptions): () => void {
   let started = false;
   return () => {

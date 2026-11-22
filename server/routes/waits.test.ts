@@ -176,6 +176,18 @@ describe("the waits route", () => {
     expect(waits.create).toHaveBeenCalledWith(expect.objectContaining({ condition: { kind: "url_contains", url: "https://x.test/", text: "ok" } }));
     expect(await call("POST", "/api/internal/waits", { ...FILE_WAIT, label: "a\nb" })).toMatchObject({ status: 400, payload: { error: "label must be a single line of plain text." } });
   });
+  it("rechecks a continuation before storing while leaving ordinary top-level waits unchanged", async () => {
+    waits.create.mockClear();
+    let allowed = true;
+    await call("POST", "/api/internal/waits", FILE_WAIT, { continuationAllowed: () => allowed });
+    const { stillAllowed } = waits.create.mock.calls[0]![0];
+    expect(stillAllowed?.()).toBeNull();
+    allowed = false;
+    expect(stillAllowed?.()).toBe(WAIT_MESSAGES.notPerson);
+    waits.create.mockClear();
+    await call("POST", "/api/internal/waits", FILE_WAIT, { continuationAllowed: () => false });
+    expect(waits.create.mock.calls[0]![0]).not.toHaveProperty("stillAllowed");
+  });
   it("lets only a person's own one-to-one turn make a wait", () => {
     const person = { owned: true, room: false, depth: 0, handedOff: false, routineRun: false, outsideDriven: false, personStarted: true, guest: false };
     expect(waitSourceRefusal(person)).toBeNull();

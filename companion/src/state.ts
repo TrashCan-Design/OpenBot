@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -13,8 +14,15 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** OMB_COMPANION_DIR isolates a test rig from a real paired fleet. */
-export const DATA_DIR = process.env.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion");
+const defaultDataDir = (): string => {
+  const openbotDir = join(homedir(), ".openbot-companion");
+  const legacyDir = join(homedir(), ".openmausbot-companion");
+  return !existsSync(openbotDir) && existsSync(legacyDir) ? legacyDir : openbotDir;
+};
+
+/** OPENBOT_COMPANION_DIR / OMB_COMPANION_DIR isolates a test rig from a real paired fleet. */
+export const DATA_DIR =
+  process.env.OPENBOT_COMPANION_DIR ?? process.env.OMB_COMPANION_DIR ?? defaultDataDir();
 
 /** The paired fleet's hashes are an offline target, and the 0755/0644 defaults
  * would publish which phones someone owns to every account on the machine. */

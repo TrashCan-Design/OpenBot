@@ -1,0 +1,503 @@
+================================================================================
+OPENBOT DUAL-ENGINE BROWSER & LINUX REMOTE DESKTOP INTEGRATION SPECIFICATION
+================================================================================
+Target File       : fast.txt
+Target Repository : https://github.com/TrashCan-Design/OpenBot
+Target Branch     : codex/windows-installer
+Integrated Stack  : 1. h4ckf0r0day/obscura (v0.2.6+ Rust Headless Engine)
+                    2. qutebrowser/qutebrowser (Keyboard/IPC-Driven X11 GUI Browser)
+                    3. OpenBot Linux Remote Desktop (trycua/xfce-cua VPS & Local VM)
+                    4. OpenBot Windows Desktop App (NSIS Installer / Electron)
+                    5. OpenBot Android Mobile App (Kotlin APK + Companion Sidecar)
+Specification Date: 2026-11-21
+================================================================================
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. Executive Architecture Overview & End-to-End Topology
+2. Why Obscura + Qutebrowser Solves OpenBot's 8-Minute Remote Desktop Bottleneck
+3. Subsystem 1: Linux Remote Desktop Image & Container Provisioning
+   3.1 Upgrading trycua/xfce-cua (server/container-computer.ts & server/vps-computer.ts)
+   3.2 Installing & Configuring Obscura Daemon (CDP :9222 + MCP) in Linux Container
+   3.3 Installing & Configuring Qutebrowser (X11 DISPLAY :1 + IPC Socket + CDP :9223)
+   3.4 CUA Driver Wrapper & Fast IPC Bridge (cua-qutebrowser-bridge.py)
+4. Subsystem 2: Dual-Browser Routing Engine in OpenBot Server
+   4.1 Intent & Surface Router (Default = Obscura, GUI/Interactive = Qutebrowser/Chrome)
+   4.2 Environment & Flag Sanitizer in server/browser-engine.ts
+   4.3 Managed Config Generation (managedBrowserConfigPath in server/browser-engine.ts)
+   4.4 Batched Macro Execution (browser_batch & run_steps in server/browser-runtime.ts)
+5. Subsystem 3: Windows Desktop App & Installer Integration (codex/windows-installer)
+   5.1 Bundling Obscura for Windows in scripts/build-windows-browser-vendor.mjs
+   5.2 Electron Builder & NSIS Packaging (electron-builder.yml & scripts/after-pack.mjs)
+   5.3 Windows-to-Linux Remote Desktop Tunneling (SSH VPS & Local WSL2/Podman/Docker VM)
+   5.4 Smoke Validation Updates (scripts/smoke-browser-bundle.mjs)
+6. Subsystem 4: Android Mobile Phone App & Companion Integration
+   6.1 End-to-End Mobile Request & Stream Path (Android APK -> Companion :8810 -> Harness :8799)
+   6.2 Companion Route & Viewer Relay Integration (companion/src/routes.ts & viewer-relay.ts)
+   6.3 Live Interactive Takeover via CloudDesktopBrowser.kt (Chrome Custom Tabs noVNC)
+   6.4 Low-Bandwidth Mobile Preview Pipeline (1280x720 JPEG SCREENSHOT_TRANSFER)
+   6.5 Mobile-Specific Prompt & Touch-Takeover Mode Switching (Obscura -> Qutebrowser)
+7. Complete File-by-File Pseudocode & Production TypeScript/Python/Kotlin Patches
+8. End-to-End Verification Matrix & CI Test Gate (codex/windows-installer)
+================================================================================
+
+
+1. EXECUTIVE ARCHITECTURE OVERVIEW & END-TO-END TOPOLOGY
+--------------------------------------------------------------------------------
+The OpenBot Dual-Engine system splits browser execution into two complementary tiers:
+
+- Tier A (Autonomous Headless - Obscura Engine):
+  Runs either locally on the Windows desktop or inside the Linux container/VPS.
+  Written in Rust, exposing native CDP on port :9222 and MCP stdio interfaces.
+  Cold-starts in <50ms, consumes <50MB RAM (compared to ~500MB - 2.8GB for Chromium).
+  Handles all automated web scraping, data extraction, form submission, and navigation
+  by directly executing atomic, batched DOM and accessibility tree operations without
+  visual screenshot round-trips.
+
+- Tier B (Visual GUI & Interactive Takeover - Qutebrowser Engine):
+  Runs on X11 DISPLAY :1 inside the Linux remote desktop (trycua/xfce-cua container).
+  Lightweight keyboard/IPC-driven QtWebEngine GUI browser.
+  Exposes an instant Unix domain command socket (/tmp/qutebrowser-ipc) and CDP port :9223.
+  Rendered directly into the container's virtual display and streamed via noVNC (port 6901)
+  to the Windows Electron Desktop and Android Mobile Chrome Custom Tabs.
+  Used when human verification, CAPTCHAs, 2FA challenges, visual validation, or live
+  user driving is required.
+
+End-to-End Topology Diagram:
++-------------------------------------------------------------------------------+
+| Client Tier: Android Mobile App (APK)  |  Windows Electron Desktop App (NSIS) |
+|  - CustomTabsIntent (noVNC :6901)      |  - Embedded noVNC WebFrame           |
+|  - SSE Preview Stream (/browser/live)  |  - Native OS Window Canvas           |
+|  - Touch Gestures (BrowserTouchSurface)|  - Mouse / Keyboard Direct Input     |
++---------------------------------------+---------------------------------------+
+                                        | (Authenticated TLS / Loopback)
+                                        v
++-------------------------------------------------------------------------------+
+| OpenBot Companion Sidecar (:8810)                                             |
+|  - Reverse Proxy (companion/src/proxy.ts)                                     |
+|  - Viewer Relay (companion/src/viewer-relay.ts - Mints 32-char Bearer Token)  |
+|  - Strict Whitelist Filter (companion/src/routes.ts)                         |
+|  - 3-Second Lease Heartbeat Watchdog                                          |
++-------------------------------------------------------------------------------+
+                                        | (Loopback HTTP / WebSocket)
+                                        v
++-------------------------------------------------------------------------------+
+| OpenBot Server Harness (:8799)                                                |
+|  - Intent & Surface Router (Autonomous vs Interactive Dispatcher)             |
+|  - Macro Batch Runner (server/browser-runtime.ts: browser_batch)              |
+|  - Computer Managers: container-computer.ts (Local VM) & vps-computer.ts (VPS)|
+|  - Dual-Engine Cookie Jar & State Synchronizer (CDP Storage Domain)           |
++---------------------------------------+---------------------------------------+
+                   /                                         \
+                  v                                           v
++----------------------------------+     +--------------------------------------+
+| Engine A: Obscura Rust Daemon    |     | Engine B: Qutebrowser QtWebEngine    |
+|  - Port :9222 (CDP) + MCP Stdio  |     |  - DISPLAY=:1 (X11 XFCE Desktop)     |
+|  - Headless, <50ms Boot, <50MB   |     |  - Port :9223 (CDP) + IPC Socket     |
+|  - Direct DOM/A11y Batch Tree    |     |  - noVNC Internal Port :6901         |
++----------------------------------+     +--------------------------------------+
+
+
+2. WHY OBSCURA + QUTEBROWSER SOLVES OPENBOT'S 8-MINUTE BOTTLENECK
+--------------------------------------------------------------------------------
+2.1 Root Cause Analysis of the Bottleneck:
+OpenBot's legacy remote computer control architecture relies on sequential multimodal
+vision loops via heavy CUA drivers:
+1. Every individual UI action (navigation, click, type, scroll) captures an uncompressed
+   full-desktop PNG (~3.2 MB).
+2. The image is compressed or transferred over WAN/SSH to the multimodal LLM for visual
+   reasoning, OCR, and coordinate extraction.
+3. The server sends mouse coordinates (`click(x, y)`) back to the CUA driver on the
+   remote desktop, waiting for display updates.
+4. Over a typical 15–25 step automation workflow, this round-trip latency compounds to
+   over 500 seconds (8.3 minutes), consuming excessive WAN bandwidth and driving container
+   RAM consumption to 500MB - 2.8GB (as documented in upstream commit 1c3d3fe01).
+
+2.2 The Dual-Engine Resolution:
+1. Direct DOM/Accessibility Execution (Obscura):
+   Obscura bypasses visual screenshot capture and coordinate guessing entirely. DOM
+   manipulation, selector clicking, and data extraction execute via batched CDP/MCP
+   primitives in <50ms per step. A 20-step macro completes in <3 seconds instead of 8 minutes.
+2. Keyboard-Hinted Navigation (Qutebrowser):
+   When visual GUI is strictly required (or during user takeover), Qutebrowser provides
+   instant keyboard hints (:open, f [hint], gi) dispatched via IPC in 10ms without mouse
+   dragging or coordinate calculations.
+3. Cold-Start Reduction:
+   Obscura boots in 45ms (30x faster than Chrome headless-shell).
+4. RAM & Resource Relief:
+   Obscura consumes <50MB RAM compared to Chrome's 500MB+, preventing Linux container OOM
+   kills and memory thrashing.
+
+
+3. SUBSYSTEM 1: LINUX REMOTE DESKTOP IMAGE & CONTAINER PROVISIONING
+--------------------------------------------------------------------------------
+3.1 Upgrading trycua/xfce-cua (server/container-computer.ts & server/vps-computer.ts)
+- Base Image: docker.io/trycua/xfce-cua@sha256:274eb636f5cf3fc58f705916ee72b7a701270b3877369d08533a385c5325be9b
+- Dockerfile Extension Layer:
+  Bump IMAGE_LAYER_VERSION to "8" in server/container-computer.ts:33.
+  Installs:
+    - Obscura v0.2.6+ Linux x64 binary -> /usr/local/bin/obscura
+    - Qutebrowser & QtWebEngine: apt-get install -y qutebrowser python3-pyqt6.qtwebengine
+    - Python IPC dependencies: websockets, aiohttp, Pillow
+  Sanitizes container labels:
+    - com.openbot.image-layer = "8"
+    - com.openbot.local-vm = "1"
+    - com.openbot.cua-driver = "0.37.0"
+
+3.2 Installing & Configuring Obscura Daemon in Linux Container
+- Supervised by runit / systemd under user `cua`:
+  Binary: /usr/local/bin/obscura
+  Arguments: --headless --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1
+  Profile Isolation: /home/cua/.config/obscura/profiles/:botId
+  Health Probe: curl -s http://127.0.0.1:9222/json/version
+
+3.3 Installing & Configuring Qutebrowser on DISPLAY=:1
+- Critical Architecture Invariant:
+  The CUA XFCE container boots its primary Xvfb session on DISPLAY=:1 (as defined in
+  server/container-computer.ts:49 and server/vps-computer.ts:653).
+  Qutebrowser MUST run on DISPLAY=:1 so that its GUI window renders into the desktop
+  streamed by noVNC on INTERNAL_VIEWER_PORT = 6901.
+  Launch Command:
+    qutebrowser --basedir /home/cua/.config/qutebrowser/profiles/:botId \
+                --qt-flag remote-debugging-port=9223 \
+                --set content.headers.user_agent "Mozilla/5.0 OpenBot/1.0" \
+                --set content.javascript.clipboard access-paste
+  Socket Location: /tmp/qutebrowser-ipc-:botId
+
+3.4 CUA Driver Wrapper & Fast IPC Bridge (cua-qutebrowser-bridge.py)
+- Python asyncio daemon listening on Unix domain socket /run/user/1000/openbot-qute-bridge.sock.
+- Translates high-level agent intents into instant Qutebrowser IPC protocol commands:
+  - open(url) -> :open <url>
+  - click_selector(sel) -> :jseval document.querySelector('<sel>').click()
+  - type_text(text) -> :insert <text>
+  - hint_click() -> :hint
+  - scroll(dy) -> :scroll-page 0 <dy>
+
+
+4. SUBSYSTEM 2: DUAL-BROWSER ROUTING ENGINE IN OPENBOT SERVER
+--------------------------------------------------------------------------------
+4.1 Intent & Surface Router
+- Located in server/browser/engines.ts and server/browser-engine.ts:
+  - Default Route: Obscura Engine (autonomous headless mode). All web scraping, DOM queries,
+    and background tool calls route here.
+  - Interactive Route (Qutebrowser): Triggered dynamically when:
+    a) Prompt explicitly requests visual desktop ("see screen", "show browser", "GUI").
+    b) Obscura encounters an interactive challenge (Cloudflare Turnstile, reCAPTCHA, 2FA).
+    c) Person initiates live takeover via Desktop UI or Mobile Companion.
+- State Synchronization:
+  - Runtime cookie and session transfer via CDP Storage.getCookies and Storage.setCookies
+    over localhost between port 9222 and 9223, avoiding SQLite locking issues.
+
+4.2 Environment & Flag Sanitizer (server/browser-engine.ts)
+- Sanitizes environment variables: Replaces OMB_* with OPENBOT_* while maintaining fallback.
+- Strips --no-sandbox when running outside containerized environments.
+- Injects OPENBOT_BROWSER_CDP_ENDPOINT=http://127.0.0.1:9222.
+
+4.3 Managed Config Generation
+- managedBrowserConfigPath: Replaces omb-managed-config.json with openbot-managed-config.json.
+- Restricts local file access and blocks unauthorized private network traversals.
+
+4.4 Batched Macro Execution (server/browser-runtime.ts)
+- Introduces `browser_batch` tool:
+  Allows the agent to emit atomic multi-step execution graphs:
+  {
+    "steps": [
+      { "action": "navigate", "url": "https://service.internal/login" },
+      { "action": "wait_for", "selector": "#username" },
+      { "action": "fill", "selector": "#username", "value": "agent" },
+      { "action": "fill", "selector": "#password", "value": "••••••" },
+      { "action": "click", "selector": "button[type=submit]" },
+      { "action": "extract", "selector": ".dashboard-summary" }
+    ]
+  }
+  Obscura executes this entire pipeline in a single <200ms batch, eliminating WAN round-trips.
+
+
+5. SUBSYSTEM 3: WINDOWS DESKTOP APP & INSTALLER INTEGRATION
+--------------------------------------------------------------------------------
+5.1 Bundling Obscura for Windows in scripts/build-windows-browser-vendor.mjs
+- Compilation Toolchain:
+  Target: x86_64-pc-windows-gnu cross-compiled on Linux x64 runner using x86_64-w64-mingw32-gcc.
+- Static Runtime Linking Invariant (Prevents Clean-Machine Crash 0xc0000135):
+  Must pass explicit static CRT and MinGW flags in RUSTFLAGS:
+    RUSTFLAGS="-C target-feature=+crt-static -C link-args=-static -C link-args=-static-libgcc"
+  Ensures no dynamic dependency on libwinpthread-1.dll or libgcc_s_seh-1.dll.
+- Windows Stdio Handle Safety:
+  Patch third_party/browser/agent-browser-windows-stdio.patch must clear HANDLE_FLAG_INHERIT
+  on stdio handles (stdin, stdout, stderr) and filter INVALID_HANDLE_VALUE (-1) to prevent
+  broken pipe EOF hangs. Spawns detached daemon with CREATE_NO_WINDOW (0x08000000) and Stdio::null().
+- Output & Provenance:
+  Produces dist-native/browser/win32-x64/obscura.exe and records SHA-256 in provenance.json.
+  Sanitizes temporary scratch directories from omb-browser-vendor- to openbot-browser-vendor-.
+
+5.2 Electron Builder & NSIS Packaging (electron-builder.yml & scripts/after-pack.mjs)
+- Resource Layout in electron-builder.yml (Lines 160–180):
+  win.extraResources correctly maps:
+    - from: dist-native/browser/win32-x64
+      to: browser-engine
+    - from: dist-native/cua-win32-x64/cua-driver.exe
+      to: cua-driver.exe
+    - from: dist-native/cua-win32-x64/cua-driver-background.exe
+      to: cua-driver-background.exe
+    - from: dist-native/cua-win32-x64/cua-sdk
+      to: cua-sdk
+  Sanitizes appId: com.openbot.app.
+- Fail-Closed Packaging Verification in scripts/after-pack.mjs:
+  Corrects prior attempt's invalid path assumption. scripts/after-pack.mjs must verify:
+    if (context.electronPlatformName === "win32") {
+      const browserRoot = path.join(resources, "browser-engine");
+      await requireRegularFile(path.join(browserRoot, "obscura.exe"));
+      if (context.packager) {
+        await requireRegularFile(path.join(resources, "cua-driver.exe"));
+        await requireRegularFile(path.join(resources, "cua-driver-background.exe"));
+        await requireRealDirectory(path.join(resources, "cua-sdk"));
+      }
+      return;
+    }
+
+5.3 Windows-to-Linux Remote Desktop Tunneling
+- Overcoming Windows OpenSSH Limitations:
+  Windows OpenSSH lacks Unix domain socket ControlMaster multiplexing (as noted in
+  server/vps-ssh.ts:72).
+  OpenBot manages persistent child SSH tunnels via server/vps-computer.ts.
+- Forwarded Port Topology:
+  ssh -N \
+      -L 127.0.0.1:<local_vnc_port>:127.0.0.1:6901 \
+      -L 127.0.0.1:<local_obscura_port>:127.0.0.1:9222 \
+      -L 127.0.0.1:<local_qute_port>:127.0.0.1:9223 \
+      user@vps
+  Strict 127.0.0.1 loopback binding prevents IPv6 (::1) aliasing dropouts on Windows.
+
+5.4 Smoke Validation Updates (scripts/smoke-browser-bundle.mjs)
+- Adds dual-engine validation suite:
+  1. Verifies obscura.exe PE32+ binary header and matches provenance.json SHA-256.
+  2. Cold-start assertion: Starts Obscura with --headless; verifies socket readiness in <50ms.
+  3. RSS Memory Benchmark: Asserts daemon memory <60MB under load.
+  4. Multi-bot isolation: Validates Bot A and Bot B run concurrently with isolated profiles.
+  5. Clean shutdown: Verifies process-tree termination via taskkill /PID <pid> /T /F on Windows.
+
+
+6. SUBSYSTEM 4: ANDROID MOBILE PHONE APP & COMPANION INTEGRATION
+--------------------------------------------------------------------------------
+6.1 End-to-End Mobile Request & Stream Path
+- Path: Android Kotlin APK -> Companion Sidecar (:8810) -> OpenBot Server Harness (:8799).
+- Secure pairing with cryptographically signed tokens; TLS/Tailscale across WAN.
+
+6.2 Companion Route & Viewer Relay Integration (companion/src/routes.ts & viewer-relay.ts)
+- Routes Permitted in companion/src/routes.ts:
+  - CLOUD_DESKTOP_JOIN_ROUTE: POST /api/bots/:id/computer/join
+  - BROWSER_LIVE_ROUTE: GET /api/bots/:id/browser/live
+  - BROWSER_ACTION_ROUTE: POST /api/bots/:id/browser/action
+  - BROWSER_ENGINE_SWITCH_ROUTE: POST /api/bots/:id/browser/engine-switch
+  - BROWSER_BATCH_ROUTE: POST /api/bots/:id/browser/batch
+- Viewer Relay (companion/src/viewer-relay.ts):
+  - Intercepts join response, mints 32-character random bearer token:
+    /vps-viewer/:token/vnc.html?autoconnect=true&resize=remote
+  - Proxies HTTP static assets and upgrades WebSocket (/websockify) to container port 6901.
+  - Enforces 3-second lease watchdog; kills stream upon permission revocation.
+
+6.3 Live Interactive Takeover via CloudDesktopBrowser.kt
+- In android/app/src/main/kotlin/com/openmausbot/companion/browser/CloudDesktopBrowser.kt:
+  Uses Android Jetpack CustomTabsIntent to launch Chrome Custom Tabs.
+- Architecture Rationale (Why Custom Tabs > WebView):
+  1. Sandboxed process: Heavy WebRTC/WebSocket decoding cannot cause OOM crashes in companion.
+  2. Full hardware canvas acceleration and WebAssembly for silky-smooth noVNC rendering.
+  3. Visible trusted origin bar prevents session spoofing and credential phishing.
+  4. URL is minted per join, handed directly to browser, and never retained in app memory.
+
+6.4 Low-Bandwidth Mobile Preview Pipeline (1280x720 JPEG SCREENSHOT_TRANSFER)
+- In server/vps-computer.ts:56–62 and container-computer.ts:
+  Downscales full-res screenshots using Pillow:
+    from PIL import Image
+    with Image.open(input_path) as image:
+        image.thumbnail((1280, 720))
+        output = io.BytesIO()
+        image.convert("RGB").save(output, format="JPEG", quality=70)
+  Reduces payload from 3.5MB PNG to ~50KB JPEG (98% reduction).
+  Feeds GET /api/bots/:id/browser/live SSE stream at 1–2 fps for live autonomous monitoring.
+
+6.5 Mobile Touch-Takeover & Gesture Mapping
+- BrowserTouchSurface.kt & RemoteGestures.kt:
+  Feeds touch events into GestureCore, mapping coordinates into GestureIntent:
+  - Tap -> Left Click / Press
+  - Long-press -> Right Click
+  - Two-finger pan -> Scroll
+  - Pinch -> Local zoom (does not reflow remote page)
+- When user switches from Autonomous (Obscura) to Interactive Takeover (Qutebrowser):
+  Obscura flushes cookies -> Qutebrowser opens target page on DISPLAY=:1 -> User takes over.
+
+
+7. COMPLETE FILE-BY-FILE PSEUDOCODE & PRODUCTION PATCHES
+--------------------------------------------------------------------------------
+
+7.1 Patch: scripts/build-windows-browser-vendor.mjs (Static MinGW Linking & Handle Safety)
+```javascript
+export const WINDOWS_VENDOR_TARGET = "x86_64-pc-windows-gnu";
+export const OBSCURA_VENDOR_VERSION = "0.2.6";
+
+function command(file, args, cwd, { input, capture = false } = {}) {
+  const result = spawnSync(file, args, {
+    cwd, input, encoding: "utf8", timeout: 30 * 60_000,
+    stdio: capture || input !== undefined ? ["pipe", "pipe", "pipe"] : "inherit",
+    env: {
+      ...process.env,
+      // Enforce static CRT and static MinGW runtime to prevent 0xc0000135 crash on clean Windows
+      RUSTFLAGS: "-C target-feature=+crt-static -C link-args=-static -C link-args=-static-libgcc",
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: "x86_64-w64-mingw32-gcc",
+    },
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`${file} ${args.join(" ")} failed: ${result.error?.message ?? result.stderr ?? result.status}`);
+  }
+  return result.stdout?.trim() ?? "";
+}
+```
+
+7.2 Patch: third_party/browser/agent-browser-windows-stdio.patch (Complete Handle Coverage)
+```rust
+#[cfg(windows)]
+pub(crate) fn prevent_stdio_handle_inheritance() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE};
+
+    unsafe {
+        for handle in [
+            std::io::stdin().as_raw_handle(),
+            std::io::stdout().as_raw_handle(),
+            std::io::stderr().as_raw_handle(),
+        ] {
+            if !handle.is_null() && (handle as isize) != INVALID_HANDLE_VALUE {
+                let _ = SetHandleInformation(handle as isize, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+```
+
+7.3 Patch: scripts/after-pack.mjs (Windows Packaging Fail-Closed Verification)
+```javascript
+export default async function afterPack(context) {
+  const resources = context.packager?.getResourcesDir?.(context.appOutDir) ?? (
+    context.electronPlatformName === "darwin"
+      ? path.join(context.appOutDir, "OpenBot.app", "Contents", "Resources")
+      : path.join(context.appOutDir, "resources")
+  );
+
+  await validateCloudflared(resources, context.electronPlatformName, Boolean(context.packager));
+
+  const arch = { 1: "x64", 3: "arm64" }[context.arch];
+  await validateDuckdb(resources, context.electronPlatformName, arch, Boolean(context.packager));
+
+  // Windows-specific resource validation
+  if (context.electronPlatformName === "win32") {
+    const browserRoot = path.join(resources, "browser-engine");
+    await requireRegularFile(path.join(browserRoot, "obscura.exe"));
+
+    // Verify Windows CUA binaries at resources/ (NOT resources/cua-win32-x64/)
+    if (context.packager) {
+      await requireRegularFile(path.join(resources, "cua-driver.exe"));
+      await requireRegularFile(path.join(resources, "cua-driver-background.exe"));
+      await requireRealDirectory(path.join(resources, "cua-sdk"));
+    }
+    return;
+  }
+
+  if (context.electronPlatformName !== "linux") return;
+  // Linux validation continues...
+}
+```
+
+7.4 Patch: companion/src/routes.ts (Dual-Engine Routing Whitelist)
+```typescript
+export const BROWSER_ENGINE_SWITCH_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/browser\/engine-switch$/,
+} as const;
+
+export const BROWSER_BATCH_ROUTE = {
+  method: "POST",
+  path: /^\/api\/bots\/[\w-]+\/browser\/batch$/,
+} as const;
+
+export function isDualEngineControl(method: string, path: string): boolean {
+  return (method === BROWSER_ENGINE_SWITCH_ROUTE.method && BROWSER_ENGINE_SWITCH_ROUTE.path.test(path))
+    || (method === BROWSER_BATCH_ROUTE.method && BROWSER_BATCH_ROUTE.path.test(path));
+}
+```
+
+7.5 Patch: Fast IPC Bridge Daemon (cua-qutebrowser-bridge.py)
+```python
+#!/usr/bin/env python3
+"""OpenBot Qutebrowser IPC Bridge Daemon for DISPLAY=:1."""
+import asyncio
+import json
+import os
+import sys
+
+IPC_SOCKET = os.environ.get("QUTE_IPC_SOCKET", "/tmp/qutebrowser-ipc")
+
+async def send_qute_command(command: str) -> str:
+    reader, writer = await asyncio.open_unix_connection(IPC_SOCKET)
+    payload = json.dumps({"args": command.split(), "target_arg": None}) + "\n"
+    writer.write(payload.encode("utf-8"))
+    await writer.drain()
+    response = await reader.readline()
+    writer.close()
+    await writer.wait_closed()
+    return response.decode("utf-8")
+
+async def handle_client(reader, writer):
+    data = await reader.read(4096)
+    req = json.loads(data.decode("utf-8"))
+    action = req.get("action")
+    if action == "open":
+        res = await send_qute_command(f":open {req['url']}")
+    elif action == "click":
+        res = await send_qute_command(":hint")
+    elif action == "type":
+        res = await send_qute_command(f":insert {req['text']}")
+    elif action == "scroll":
+        res = await send_qute_command(f":scroll-page 0 {req.get('dy', 1)}")
+    else:
+        res = json.dumps({"error": f"Unknown action: {action}"})
+    writer.write(res.encode("utf-8"))
+    await writer.drain()
+    writer.close()
+
+async def main():
+    bridge_socket = "/run/user/1000/openbot-qute-bridge.sock"
+    if os.path.exists(bridge_socket):
+        os.remove(bridge_socket)
+    server = await asyncio.start_unix_server(handle_client, bridge_socket)
+    async with server:
+        await server.serve_forever()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+
+8. END-TO-END VERIFICATION MATRIX & CI TEST GATE
+--------------------------------------------------------------------------------
+- Test Gate 1: Windows Cross-Compilation Static Link Check
+  Command: objdump -p dist-native/browser/win32-x64/obscura.exe | grep "DLL Name"
+  Pass Assertion: Confirms ONLY kernel32.dll, user32.dll, ntdll.dll. Zero references to
+  libwinpthread-1.dll or libgcc_s_seh-1.dll.
+
+- Test Gate 2: Windows Smoke Bundle Test
+  Command: node scripts/smoke-browser-bundle.mjs --target=win32-x64 --engine=obscura
+  Pass Assertion: Obscura cold-starts in <50ms, executes batched DOM navigation, RSS memory
+  stays under 60MB, and process tree cleanly terminates via taskkill on Windows.
+
+- Test Gate 3: Linux Container Dual-Engine Readiness
+  Command: docker run --rm -d --name test-cua trycua/xfce-cua:driver-0.37.0-v8
+  Pass Assertion:
+    1. curl -s http://127.0.0.1:9222/json/version (Obscura returns CDP 1.3 protocol).
+    2. curl -s http://127.0.0.1:9223/json/version (Qutebrowser QtWebEngine CDP answers).
+    3. DISPLAY=:1 xwininfo -root (Confirms X11 session active on :1).
+
+- Test Gate 4: Android Companion End-to-End Join
+  Command: ./gradlew :android:app:testDebugUnitTest --tests "*CloudDesktopBrowserTest*"
+  Pass Assertion: Verifies CustomTabsIntent parameters, URL encoding, origin validation,
+  and WebSocket upgrade proxy through companion viewer-relay.
+================================================================================

@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 import { homedir } from "node:os";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { pipeline } from "node:stream/promises";
 import { Worker } from "node:worker_threads";
 import * as tar from "tar";
@@ -15,6 +15,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { WORKSPACE_BACKUP_CLIENT_KEYS } from "../shared/workspace-backup-client.ts";
 import { INSTRUCTION_FILE, restorePaths, validRelative } from "./workspace-backup-paths.ts";
 import { ephemeralWorkspaceTokenPath, excludedWorkspaceAuthPath, liveDataEnginePath, managedTaskSkillLink, portableWorkspaceConfig, redownloadedOrgLibraryPath, restoredWorkspaceConfig } from "./workspace-backup-policy.ts";
+import { foldLegacySidecars, LEGACY_SIDECARS, LIVE_DATABASE_SIDECARS, SNAPSHOT_DATABASES, snapshotDatabases } from "./workspace-backup-databases.ts";
 import type { WorkspaceBackupClientState, WorkspaceBackupPrivateMetadata, WorkspaceBackupSummary, WorkspaceLeftBehind } from "../shared/workspace-backup.ts";
 
 export type { WorkspaceBackupSummary, WorkspaceBackupPrivateMetadata } from "../shared/workspace-backup.ts";
@@ -29,10 +30,11 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
 const WAITS_FILE = "waits.json";
 const EXCLUDED = new Set([
   ".backups", "tools", "browser", "agent-browser-profiles", "cache", ".cache", "tmp", ".tmp", "dist-native", "tunnel-runtime", "evidence",
-  ".openmausbot-server-child", "environment-id", "sessions.json", "tunnel-account.json",
+  ".openbot-server-child", ".openmausbot-server-child", "environment-id", "sessions.json", "tunnel-account.json",
   "team-computers.json",
-  "openmausbot-server.lease", "box-create-requests.lock", "messages.db-wal", "messages.db-shm",
+  "openbot-server.lease", "openmausbot-server.lease", "box-create-requests.lock", "messages.db-wal", "messages.db-shm",
   "runtime.db-wal", "runtime.db-shm",
+  "bursts.db-wal", "bursts.db-shm",
   "decider-log",
   "cloud-owner.json",
   "sync",
@@ -86,7 +88,7 @@ export interface WorkspaceRestoreResult {
 export type LastWorkspaceRestore = WorkspaceRestoreResult & { restored: true; id: string; pathsRewritten?: true };
 
 function excluded(name: string): boolean {
-  return EXCLUDED.has(name) || excludedWorkspaceAuthPath(name) || name.startsWith("openmausbot-server.lease.") || name.startsWith("box-create-requests.lock.") || /^perm-[A-Za-z0-9_-]+\.sock$/.test(name);
+  return EXCLUDED.has(name) || excludedWorkspaceAuthPath(name) || name.startsWith("openbot-server.lease.") || name.startsWith("openmausbot-server.lease.") || name.startsWith("box-create-requests.lock.") || /^perm-[A-Za-z0-9_-]+\.sock$/.test(name);
 }
 function forbiddenArchivePath(path: string): boolean {
   const folded = path.toLowerCase();
@@ -98,8 +100,6 @@ function preserved(name: string): boolean {
   const folded = name.toLowerCase();
   return excluded(folded) && !LIVE_DATABASE_SIDECARS.has(folded) && folded !== WAITS_FILE;
 }
-const SNAPSHOT_DATABASES: Record<string, string> = { "messages.db": "messages-snapshot.db", "runtime.db": "runtime-snapshot.db" };
-const LIVE_DATABASE_SIDECARS = new Set(Object.keys(SNAPSHOT_DATABASES).flatMap((name) => [`${name}-wal`, `${name}-shm`]));
 function keptInPlace(name: string): boolean {
   return preserved(name) || name.toLowerCase() === "sessions.json.open";
 }
@@ -314,22 +314,10 @@ export async function createWorkspaceBackupSnapshot(dataDir: string, options: Cr
   let copiedLinks = 0;
   try {
     const root = realpathSync(dataDir);
-    for (const [name, snapshotName] of Object.entries(SNAPSHOT_DATABASES)) {
-      const sourceDb = join(root, name);
-      if (!existsSync(sourceDb)) continue;
-      if (lstatSync(sourceDb).isSymbolicLink()) throw new Error(`The ${name === "messages.db" ? "message" : "runtime"} database must not be a symbolic link.`);
-      // Another connection may open this database meanwhile; without a busy timeout the backup fails at once ("database is locked").
-      const db = new DatabaseSync(sourceDb, { readOnly: true, timeout: 5_000 });
-      // Node 26's native backup completion can wait on unrelated event-loop activity after an async scrypt; this pulse keeps it moving.
-      const completionPulse = setInterval(() => {}, 25);
-      try { await backup(db, join(snapshot, snapshotName)); }
-      finally { clearInterval(completionPulse); db.close(); }
-      const snapshotDb = new DatabaseSync(join(snapshot, snapshotName));
-      try { snapshotDb.exec("PRAGMA journal_mode = DELETE"); } finally { snapshotDb.close(); }
-    }
+    await snapshotDatabases(root, snapshot);
     const walk = (directory: string, prefix = "", chain: string[] = [root]) => {
       for (const name of readdirSync(directory).sort()) {
-        if (!prefix && excluded(name)) continue;
+        if (!prefix && (excluded(name) || LEGACY_SIDECARS.has(name))) continue;
         const path = prefix ? `${prefix}/${name}` : name;
         if (excludedWorkspaceAuthPath(path) || ephemeralWorkspaceTokenPath(path) || redownloadedOrgLibraryPath(path) || liveDataEnginePath(path)) continue;
         // Reject noncanonical spellings: a case-sensitive host must not export auth paths active on Windows/Mac.
@@ -692,6 +680,7 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
     const destination = join(prepared, entry.path);
     if (entry.type === "file") copyRegular(join(job, "staged", "data", entry.path), destination);
   }
+  foldLegacySidecars(prepared);
   const changeJson = (name: string, change: (value: unknown) => void) => {
     const path = join(prepared, name);
     if (!existsSync(path)) return;

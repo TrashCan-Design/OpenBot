@@ -97,7 +97,7 @@ internal class WebRtcLiveCallTransport(context: Context) : LiveCallTransport {
         source = audioSource
         val track = peerFactory.createAudioTrack("mic0", audioSource)
         microphone = track
-        connection.addTrack(track, listOf("omb"))
+        connection.addTrack(track, listOf("openbot"))
 
         // Before the offer, so the m=application section is negotiated.
         val events = connection.createDataChannel(LiveCallTransport.DATA_CHANNEL, DataChannel.Init())
@@ -166,25 +166,25 @@ internal class WebRtcLiveCallTransport(context: Context) : LiveCallTransport {
     override fun close() {
         if (!guard.close()) return
         channel?.let {
-            it.unregisterObserver()
-            it.close()
-            it.dispose()
+            runCatching { it.unregisterObserver() }
+            runCatching { it.close() }
+            runCatching { it.dispose() }
         }
         channel = null
         peer?.let {
-            it.close()
-            it.dispose()
+            runCatching { it.close() }
+            runCatching { it.dispose() }
         }
         peer = null
-        microphone?.dispose()
+        runCatching { microphone?.dispose() }
         microphone = null
         // The track holds the source natively but never releases this handle
         // on it, so without this every call would leak one audio source.
-        source?.dispose()
+        runCatching { source?.dispose() }
         source = null
-        factory?.dispose()
+        runCatching { factory?.dispose() }
         factory = null
-        adm?.release()
+        runCatching { adm?.release() }
         adm = null
         // Last: a waiter resumed by this finds everything already released.
         guard.failPending()

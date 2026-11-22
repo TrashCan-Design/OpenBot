@@ -74,7 +74,7 @@ object AttachmentImportRules {
         else -> "jpg"
     }
 
-    /** Whatever the 50 MB total has left after what is already attached. */
+    /** Whatever the 100 MB total has left after what is already attached. */
     fun remainingBytes(attached: List<PendingMessageAttachment>): Int =
         max(0, AttachmentPolicy.MAXIMUM_TOTAL_BYTES - attached.sumOf { it.data.size })
 

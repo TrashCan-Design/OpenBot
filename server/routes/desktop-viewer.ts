@@ -72,8 +72,8 @@ export function createDesktopViewer(deps: {
     }
     if (botId === null && threadId !== undefined) return json(res, 400, { error: "threadId needs botId and controlLeaseId" });
     // A saved or constructed socket URL must not bypass the join refusal: a bot's lease does not exclude other users of a shared desktop.
-    if (botId !== null && (match[1] === "local/shared" || match[1].startsWith("local/pool-"))) {
-      return json(res, 409, { error: "Phone control requires a per-bot Local VM. Select per-bot mode in Settings → Computers." });
+    if (botId !== null && match[1].startsWith("local/pool-")) {
+      return json(res, 409, { error: "Phone control is not available in pool mode. Select shared or per-bot mode in Settings → Computers." });
     }
     const bound = botId === null ? undefined : deps.lease!(match[1], botId, controlLeaseId!, threadId);
     if (botId !== null && !bound) return json(res, 409, { error: "Take control of this computer first" });
@@ -164,6 +164,7 @@ export function createDesktopViewer(deps: {
       if (pending.head.length) remote.write(pending.head);
       pending.head = Buffer.alloc(0);
       socket.pipe(remote).pipe(socket);
+      socket.setKeepAlive(true, 15_000);
       connection.touch?.();
       recheck = setInterval(() => {
         if (!live() || !holds()) upgrade.close();

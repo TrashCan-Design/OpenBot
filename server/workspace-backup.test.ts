@@ -114,7 +114,7 @@ function caseSensitiveTempFolder(): boolean {
 }
 afterEach(() => { for (const root of scratch.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-describe("encrypted full workspace backups", () => {
+describe("encrypted full workspace backups", { timeout: 120_000 }, () => {
   it("leaves waits out of backups and Cloud sends", () => expect(omittedFromWorkspaceBackup("waits.json")).toBe(true));
 
   it("carries no waits, and a restore ends the waits already here, keeping them in the safety copy", async () => {

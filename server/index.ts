@@ -49,7 +49,7 @@ import { RoomMemberLock } from "./room-member-lock.ts";
 import { approvalHeldNote, approvalHeldReason, approvalModeForOrigin, autoVerdict, deliverFullAccessApproval, undeliveredApprovalTool } from "./auto-approve.ts"; import { readsOwnFiles } from "./own-file-reads.ts";
 import { bindSafetyFloor, denyAtSafetyFloor, heldAtSafetyFloor, safetyFloorOn } from "./safety-floor-gate.ts";
 import { CommandAllowlistStore, commandAllowlistCandidate } from "./command-allowlist.ts";
-import { providerMcpTool, providerToolAllowKey } from "./provider-tool-allow.ts";
+import { providerMcpTool, providerToolAllowKey, providerToolConfig, savedToolGrant } from "./provider-tool-allow.ts";
 import type { CommandAllowlistCandidate, CommandAllowlistResponse } from "../shared/command-allowlist.ts";
 import { claudeAccountInfo } from "./claude-accounts.ts";
 import {
@@ -336,7 +336,8 @@ import { Handoffs, handedStateUsable, isContextMessage, recordHanded, renderUnse
 import { extractReplayImages, extractTurnImages } from "./turn-images.ts";
 import { callTitleExcerpt } from "./thread-title.ts";
 import { generateThreadTitle, llmThreadTitlesEnabled } from "./thread-title-generate.ts";
-import { stallLimitMs, TurnWatchdog } from "./turn-watchdog.ts";
+import { chatNotice } from "./chat-notices.ts";
+import { engineCommandCpuMs, engineProcessExited, engineProcessGone, ENGINE_EXIT_STALL_MS, stallLimitMs, stallNotice, TurnWatchdog } from "./turn-watchdog.ts";
 import { TurnResources, type TurnOwner } from "./turn-resources.ts";
 import {
   ensureWorkspace,
@@ -482,7 +483,7 @@ import { listenWebhookIngress, type WebhookIngress } from "./webhook-ingress.ts"
 import { addressFor } from "./webhook-address.ts";
 import { assertModelVariantSupported, memberTurnSelection } from "./member-turn.ts";
 import { WebhookManager } from "./webhooks.ts";
-import { tieAutomationsToBots } from "./bot-automations.ts"; import { WaitManager } from "./waits.ts"; import { cancelWaitFromCard, createWaitHost, waitRunChat } from "./wait-host.ts"; import { createWaitRoutes, findWaitPeer, hostWaitRefusal, waitSourceRefusal, type WaitRouteContext } from "./routes/waits.ts";
+import { tieAutomationsToBots } from "./bot-automations.ts"; import { WaitManager } from "./waits.ts"; import { cancelWaitFromCard, createWaitHost, waitContinuationCheck, waitRunChat, waitTurnRunId } from "./wait-host.ts"; import { createWaitRoutes, findWaitPeer, handedAssignment, hostWaitRefusal, waitSourceRefusal, type WaitRouteContext } from "./routes/waits.ts";
 import type { WebhookTrigger } from "../shared/webhooks.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { agentsProxyLaunch, agentsToolBridgeEnv, applyAgentsBridge, bridgedToolTitle, turnEngine } from "./agents-bridge-switch.ts"; import { agentsServerEnv, COMPUTER_OFF_REFUSAL, computerPickRefusal, directTurnKind, roomSkillsRefusal, type TurnKind } from "./agents-turn.ts";
@@ -520,7 +521,7 @@ import {
   isTurnEventQuarantined,
 } from "./turn-dispatch-guard.ts";
 import { createGracefulShutdown } from "./graceful-shutdown.ts";
-import { acquireDataDirLeaseForProcess } from "./data-dir-lease.ts";
+import { acquireDataDirLeaseForProcess, clearRecordsFromEarlierRunOfThisContainer } from "./data-dir-lease.ts";
 import { createWorkspaceAccess, describeEdition, editionForSettings, editionStatus, entitled, hostedWorkspaceConfiguration, hostedWorkspaceConfigured, licenseWarning, sharedWorkspaceFullAccessConfigured, loadEnterpriseLayer, workspaceMembership, type WorkspaceAccess } from "./enterprise.ts";
 import { environmentDescriptor, loadEnvironmentId, serverVersion } from "./environment.ts";
 import { WorkspaceBackupMaintenance } from "./workspace-backup-maintenance.ts";
@@ -604,6 +605,8 @@ import { createRoomHoldRoutes } from "./routes/room-holds.ts";
 import { checkedGroupResponder, createGroupRoutes } from "./routes/groups.ts";
 import { createChannelRoutes } from "./routes/channels.ts";
 import { createTaskRoutes } from "./routes/tasks.ts";
+import { createSpawnLevel } from "./host/spawn-level.ts";
+import type { NewThreadLevel } from "./task-record.ts";
 import { createTeamRoutes } from "./routes/teams.ts";
 import { createThreadModelRoutes } from "./routes/thread-models.ts";
 import { createUndoRoutes } from "./routes/undo.ts";
@@ -648,6 +651,7 @@ const WEBHOOK_PUBLIC_URL = process.env.OMB_WEBHOOK_PUBLIC_URL || undefined;
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
 
 ensureDirs();
+clearRecordsFromEarlierRunOfThisContainer(DATA_DIR);
 // Acquire before any durable identity, sessions, config or Store state is loaded.
 const dataDirLease = acquireDataDirLeaseForProcess(DATA_DIR);
 let dataDirLeaseReleaseAttempted = false;
@@ -1034,14 +1038,12 @@ function openerFrom(fromThreadId: string): string | undefined {
   return person && !cloudOwnerPerson(person) ? person : CLOUD_NOBODY_KEY;
 }
 
-function parentThreadModel(botId: string, parentThreadId: string): { modelSelection?: ModelSelection; approvalMode?: "ask" } {
+function parentThreadModel(botId: string, parentThreadId: string): { modelSelection?: ModelSelection; approvalMode?: NewThreadLevel } {
   const bot = store.bot(botId);
-  const modelSelection = bot && store.taskByThread(bot.id, parentThreadId)?.modelSelection;
-  if (!bot || !modelSelection) return {};
-  const needsAsk = modelSwitchNeedsAsk(approvalModeFor(bot),
-    registry.cliTarget(bot.modelSelection.instanceId)?.driverKind,
-    registry.cliTarget(modelSelection.instanceId)?.driverKind);
-  return { modelSelection, ...(needsAsk ? { approvalMode: "ask" as const } : {}) };
+  if (!bot) return {};
+  const modelSelection = store.taskByThread(bot.id, parentThreadId)?.modelSelection;
+  const approvalMode = spawnLevel(bot, modelSelection, { botId, threadId: parentThreadId });
+  return { ...(modelSelection ? { modelSelection } : {}), ...(approvalMode ? { approvalMode } : {}) };
 }
 
 const ROUTINE_FROM_BEFORE = "This routine was made before this update. Open it and save it once to run it with full access.";
@@ -1959,6 +1961,7 @@ const directTurnGenerationByThread = new Map<string, string>();
 const directRequestOwners = new Map<string, {
   generation: string; messageId?: string; generations: Set<string>; turnId: string | null; stopped?: boolean;
   automation?: RoutineRunTrigger;
+  automationRunId?: string;
   origin?: WorkOrigin; personLine?: true; kind?: TurnKind;
 }>();
 type DirectTurnOutcome = HostTurnResult;
@@ -3165,6 +3168,12 @@ function peerReviewRequired(bot: BotRecord, threadId: string): boolean {
 
 const delegatedLevel = createDelegatedLevel({ store, node: id => coordinator.node(id), sourceLevel: sourceApprovalMode, turnLevel: approvalModeForTurn,
   driverKind: bot => registry.cliTarget(bot.modelSelection.instanceId)?.driverKind, guestDriven: cloudGuestDriven });
+const spawnLevel = createSpawnLevel({
+  store,
+  driverKind: (instanceId) => registry.cliTarget(instanceId)?.driverKind,
+  sourceLevel: sourceApprovalMode,
+  mayRaise: (threadId) => (!CLOUD_HOME || cloudOwnerPerson(threadPersonKey(threadId))) && (!HOSTED_WORKSPACE || sharedWorkspaceFullAccessEnabled()),
+});
 const liveApprovalMode = createLiveApprovalMode({ store, turnLevel: approvalModeForTurn });
 
 function roomTurnApprovalMode(bot: BotRecord, threadId: string, orchestration?: GroupTurnOrchestration): ApprovalMode {
@@ -4999,9 +5008,9 @@ function stoppedTurnText(threadId: string, turnId: string | undefined, cause?: s
   });
 }
 const watchdog = new TurnWatchdog({
-  stallMs: TURN_STALL_MS, toolStallMs: TOOL_STALL_MS,
-  checkMs: 60_000,
-  onStall: (turn, silentMs) => {
+  stallMs: TURN_STALL_MS, toolStallMs: TOOL_STALL_MS, parkedStallMs: COMPUTER_WAIT_MAX_MS + TURN_STALL_MS, engineExitStallMs: ENGINE_EXIT_STALL_MS, commandCpuMs: (turn, since) => engineCommandCpuMs(runningTurnInstance(botForThread(turn.botId, turn.threadId), turn.threadId)?.adapter, turn.threadId, since),
+  checkMs: 60_000, engineGone: (turn) => engineProcessGone(runningTurnInstance(botForThread(turn.botId, turn.threadId), turn.threadId)?.adapter, turn.threadId), engineExited: (turn) => engineProcessExited(runningTurnInstance(botForThread(turn.botId, turn.threadId), turn.threadId)?.adapter, turn.threadId),
+  onStall: (turn, silentMs, reason) => {
     const stalledResourceOwner = turnResourceOwners.get(turn.threadId);
     const stalledGeneration = directTurnGenerationByThread.get(turn.threadId);
     const stalledProviderTurn = directRequestOwners.get(turn.threadId);
@@ -5012,10 +5021,10 @@ const watchdog = new TurnWatchdog({
     const bot = botForThread(turn.botId, turn.threadId);
     const routineRun = activeRoutineRunForThread(turn.threadId);
     void runningTurnInstance(bot, turn.threadId)?.adapter.interruptTurn(turn.threadId).catch(() => {});
-    const minutes = Math.round(silentMs / 60_000), cause = engineMemory.stallCause(turn.threadId, `no activity for ${minutes} minutes — the turn was stopped`);
+    const minutes = Math.round(silentMs / 60_000), notice = stallNotice(turn, silentMs, Date.now(), reason), stallCause = chatNotice(notice.key, notice.params), cause = engineMemory.stallCause(turn.threadId, stallCause);
     const stalled = stoppedTurnText(turn.threadId, liveTurnByThread.get(turn.threadId), cause);
     if (routineRun?.target === "bot") {
-      routines?.failThread(turn.threadId, engineMemory.stallCause(turn.threadId, `No activity for ${minutes} minutes — the routine was stopped`), { cause: "stalled" });
+      routines?.failThread(turn.threadId, engineMemory.stallCause(turn.threadId, reason === "engine-exited" ? stallCause : `No activity for ${minutes} minutes — the routine was stopped`), { cause: "stalled" });
     }
     store.appendMessage(turn.threadId, {
       role: "bot",
@@ -6542,12 +6551,12 @@ bus.subscribe((event: RuntimeEvent) => {
       const command = permission && asker && event.requestId && !event.requiresExplicitApproval && event.command && !guestDriven
         ? commandAllowlistCandidate({ ...event.command, providerInstanceId: event.providerInstanceId ?? asker.modelSelection.instanceId })
         : null;
-      // Bound to provider and server config, so a switch or edit invalidates the grant; built-in or spoofed server names never get a durable key.
+      // Bound to provider and server config, so a switch or edit invalidates the grant; a built-in bridge is named, never its turn token, and a local-computer ask is never remembered.
       const providerInstanceId = asker ? event.providerInstanceId ?? asker.modelSelection.instanceId : "";
-      const providerTool = permission && asker && event.requestId && !event.requiresExplicitApproval && !guestDriven
+      const providerTool = permission && asker && event.requestId && !event.requiresExplicitApproval && !guestDriven && event.approvalScope !== "local-computer"
         ? providerMcpTool(event.tool)
         : null;
-      const configuredMcp = providerTool && asker ? engineMcpServers(asker)[providerTool.server] : undefined;
+      const configuredMcp = providerTool && asker ? providerToolConfig(providerTool.server, engineMcpServers(asker)) : undefined;
       const toolAllowKey = configuredMcp === undefined
         ? null
         : providerToolAllowKey(providerInstanceId, event.tool, configuredMcp);
@@ -6555,7 +6564,7 @@ bus.subscribe((event: RuntimeEvent) => {
         ? heldAtSafetyFloor(event, autoVerdict(effectiveApprovalMode, event.tool, {
           requiresExplicitApproval: event.requiresExplicitApproval,
           commandAllowed: Boolean(command && commandAllowlist.matches(asker.id, command)),
-          toolAllowed: Boolean(toolAllowKey && asker.alwaysAllow?.includes(toolAllowKey)), ownFilesRead: !guestDriven && readsOwnFiles(DATA_DIR, asker.id, event), // never in a guest's turn: the folder holds its owner's memory
+          toolAllowed: savedToolGrant(toolAllowKey, asker.alwaysAllow, store.bot(asker.id)?.alwaysAllow), ownFilesRead: !guestDriven && readsOwnFiles(DATA_DIR, asker.id, event), // never in a guest's turn: the folder holds its owner's memory
         }))
         : null;
       // Claude accepts --permission-mode auto for any model but silently starts in Manual where auto is unavailable (Haiku 4.5, Sonnet 4.5, an org that disabled it).
@@ -7643,6 +7652,7 @@ async function startTurn(
     runOn?: RoutineRunOn;
     /** Puts externally supplied payloads behind an explicit untrusted-data boundary in the system prompt. */
     automationSource?: RoutineRunTrigger;
+    automationRunId?: string;
     unattended?: boolean;
     peerAsk?: Message["peerAsk"];
     /** The prompt is control-plane context, never a message authored by the user. */
@@ -7850,7 +7860,7 @@ async function startTurn(
   const requestOrigin = requestWorkOrigin({ trigger: opts?.automationSource, guest: guestConfined, handed: opts?.origin, continued,
     line: !continuation && requestMessageId === userMessage.id ? userMessage : undefined });
   directRequestOwners.set(threadId, { generation: dispatchClaimId, messageId: requestMessageId,
-    generations: requestGenerations, turnId: null, ...(opts?.automationSource ? { automation: opts.automationSource } : {}), origin: requestOrigin, ...(personLine || (continued && previousRequest?.personLine) ? { personLine: true as const } : {}),
+    generations: requestGenerations, turnId: null, ...(opts?.automationSource ? { automation: opts.automationSource } : {}), automationRunId: waitTurnRunId(opts, previousRequest, requestMessageId), origin: requestOrigin, ...(personLine || (continued && previousRequest?.personLine) ? { personLine: true as const } : {}),
     kind: directTurnKind({ ...opts, peerAsk: opts?.peerAsk ?? userMessage.peerAsk }) });
   const notesRefused = CLOUD_PERSONAL && cloudHomeLendingRefusal(cloudLendingTurn({ botId, threadId, generation: dispatchClaimId })) !== null;
   if (notesRefused) noteForeignTurn(botId, threadId, dispatchClaimId);
@@ -8937,8 +8947,8 @@ routines = new RoutineManager({
       handoffs.forget(threadId);
     }
   },
-  startTurn: async (botId, threadId, prompt, runOn, triggerSource, onDispatchError) => {
-    if (!companyShutdown) await startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, onDispatchError });
+  startTurn: async (botId, threadId, prompt, runOn, triggerSource, onDispatchError, runId) => {
+    if (!companyShutdown) await startTurn(botId, prompt, { threadId, runOn, automationSource: triggerSource, automationRunId: runId, onDispatchError });
   },
   startGoal: async (groupId, threadId, prompt, coordinatorBotId, runId, _onDispatchError) => {
     if (!groupId) {
@@ -11252,8 +11262,9 @@ function connectorThread(botId: string, threadId: string) {
   return null;
 }
 function directChatOf(botId: string, threadId: string): boolean { const source = connectorThread(botId, threadId); return source !== null && !source.group; }
-function waitTurnChecks(capability: InternalCapability, sender: BotRecord): Pick<WaitRouteContext, "sourceRefusal" | "hostRefusal" | "guest" | "peer" | "elsewhere"> { const { threadId } = capability, place = () => { const turn = turnPlaces.get(threadId); return turn?.botId === sender.id ? turn.place : null; };
-  return { sourceRefusal: () => { const source = connectorThread(sender.id, threadId); return waitSourceRefusal({ owned: source !== null, room: Boolean(source?.group), depth: capability.depth, handedOff: Boolean(capability.roomHandoffId), routineRun: Boolean(activeRoutineRunForThread(threadId)), outsideDriven: outsideDrivenThread(threadId), personStarted: turnOrigin(capability).kind === "user", guest: cloudGuestDriven(threadId) }); }, hostRefusal: () => hostWaitRefusal({ cloudHome: Boolean(CLOUD_HOME), hosted: HOSTED_WORKSPACE, guest: cloudGuestDriven(threadId), place: place() }), guest: () => cloudGuestDriven(threadId), peer: (name) => findWaitPeer(reachablePeers(store.bots, sender), sender.id, name), elsewhere: placesElsewhere.explain }; }
+function waitTurnChecks(capability: InternalCapability, sender: BotRecord): Pick<WaitRouteContext, "sourceRefusal" | "assignmentId" | "continuationAllowed" | "hostRefusal" | "guest" | "peer" | "elsewhere"> { const { threadId } = capability, place = () => { const turn = turnPlaces.get(threadId); return turn?.botId === sender.id ? turn.place : null; }, assignmentId = () => handedAssignment(capability.roomHandoffId ?? directCoordinationSettlers.get(capability.generation)?.nodeId, (id) => coordinator.node(id));
+  const continuationAllowed = waitContinuationCheck(capability, { active: internalCapabilityIsActive, request: (id) => directRequestOwners.get(id), run: activeRoutineRunForThread, store });
+  return { assignmentId, continuationAllowed, sourceRefusal: (op, assignment) => { const source = connectorThread(sender.id, threadId); return waitSourceRefusal({ owned: source !== null, room: Boolean(source?.group), depth: capability.depth, handedOff: Boolean(capability.roomHandoffId), routineRun: Boolean(activeRoutineRunForThread(threadId)), waitContinuation: continuationAllowed(), outsideDriven: outsideDrivenThread(threadId), personStarted: turnOrigin(capability).kind === "user", guest: cloudGuestDriven(threadId), op, assignmentId: assignment }); }, hostRefusal: () => hostWaitRefusal({ cloudHome: Boolean(CLOUD_HOME), hosted: HOSTED_WORKSPACE, guest: cloudGuestDriven(threadId), place: place() }), guest: () => cloudGuestDriven(threadId), peer: (name) => findWaitPeer(reachablePeers(store.bots, sender), sender.id, name), elsewhere: placesElsewhere.explain }; }
 
 /** Read fresh every time; a line stamped via the HTTP API does not count, so a bot cannot re-arm the ceiling it just spent. */
 function lastHumanRoomMessageAt(group: GroupRecord): number | undefined {
@@ -13942,13 +13953,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             if (lane) delegatedLevel.apply(internalSender, internalCapability.threadId, internalCapability.roomHandoffId ?? generation, recipient, lane.threadId);
             if (!room) {
               const opened = { botId: internalSender.id, name: internalSender.name, threadId: address.threadId, at: Date.now() };
+              const level = call.ownThread ? call.ownThread.approvalMode : EXTERNAL || mode === "consult" ? undefined : spawnLevel(recipient, undefined, address);
               const task = continued ?? (fresh
-                ? store.createTask(target.botId, call.title ?? (call.message.replace(/\s+/g, " ").trim().slice(0, 60) || `From ${internalSender.name}`), false, call.projectId, opened, undefined, undefined, folder.cwd)
-                : store.createTask(target.botId, `@${internalSender.name} · work`, false, undefined, { ...opened, kind: "work" }, undefined, undefined, folder.cwd));
+                ? store.createTask(target.botId, call.title ?? (call.message.replace(/\s+/g, " ").trim().slice(0, 60) || `From ${internalSender.name}`), false, call.projectId, opened, level, call.ownThread?.modelSelection, folder.cwd)
+                : store.createTask(target.botId, `@${internalSender.name} · work`, false, undefined, { ...opened, kind: "work" }, level, undefined, folder.cwd));
               if (!task) throw new Error("The recipient no longer exists");
               target.threadId = task.threadId;
               if (!continued) createdThread = task.threadId;
-              delegatedLevel.apply(internalSender, internalCapability.threadId, internalCapability.roomHandoffId ?? generation, recipient, target.threadId);
+              delegatedLevel.apply(internalSender, internalCapability.threadId, internalCapability.roomHandoffId ?? generation, recipient, target.threadId, !continued);
             }
             const routed = lane ? { botId: target.botId, threadId: lane.threadId } : target;
             const { node, duplicate } = coordinator.enqueue(address, generation, internalCapability.roomHandoffId, routed, call.message, {

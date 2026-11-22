@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import afterPack from "./after-pack.mjs";
+import afterPack, { validateCuaWin } from "./after-pack.mjs";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
 
 const temporaryDirectories = [];
@@ -89,6 +89,38 @@ describe("desktop browser package gate", () => {
     fs.mkdirSync(path.join(resources, "browser-engine"));
     await expect(afterPack({ electronPlatformName: "win32", arch: 0, appOutDir }))
       .rejects.toThrow(/Unsupported desktop browser package architecture/);
+  });
+});
+
+describe("Windows afterPack verification", () => {
+  it("fails closed when CUA binaries are missing and required", async () => {
+    const { resources } = fixture();
+    await expect(validateCuaWin(resources, true)).rejects.toThrow();
+  });
+
+  it("fails closed when partial CUA binaries exist even if not required", async () => {
+    const { resources } = fixture();
+    fs.writeFileSync(path.join(resources, "cua-driver.exe"), "fixture");
+    await expect(validateCuaWin(resources, false)).rejects.toThrow();
+  });
+
+  it("passes when all CUA binaries and sdk directory exist", async () => {
+    const { resources } = fixture();
+    for (const name of ["cua-driver.exe", "cua-driver-background.exe"]) {
+      fs.writeFileSync(path.join(resources, name), "fixture");
+    }
+    fs.mkdirSync(path.join(resources, "cua-sdk"));
+    await expect(validateCuaWin(resources, true)).resolves.toBeUndefined();
+  });
+
+  it("afterPack calls validateCuaWin on win32", async () => {
+    const { appOutDir, resources } = fixture();
+    for (const name of ["cua-driver.exe", "cua-driver-background.exe"]) {
+      fs.writeFileSync(path.join(resources, name), "fixture");
+    }
+    fs.mkdirSync(path.join(resources, "cua-sdk"));
+    await expect(afterPack({ electronPlatformName: "win32", arch: 1, appOutDir }))
+      .resolves.toBeUndefined();
   });
 });
 

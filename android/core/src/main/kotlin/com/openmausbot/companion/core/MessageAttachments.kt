@@ -36,7 +36,7 @@ class AttachmentPolicyException(message: String) : Exception(message)
  */
 object AttachmentPolicy {
     const val MAXIMUM_ITEMS: Int = 4
-    const val MAXIMUM_TOTAL_BYTES: Int = 50 * 1_024 * 1_024
+    const val MAXIMUM_TOTAL_BYTES: Int = 100 * 1_024 * 1_024
     const val MAXIMUM_IMAGE_BYTES: Int = 10 * 1_024 * 1_024
     const val MAXIMUM_FILE_BYTES: Int = 100 * 1_024 * 1_024
 
@@ -62,7 +62,7 @@ object AttachmentPolicy {
     )
 
     const val TOO_MANY_ITEMS: String = "Attach up to 4 items at a time."
-    const val TOTAL_TOO_LARGE: String = "Those attachments are larger than 50 MB together."
+    const val TOTAL_TOO_LARGE: String = "Those attachments are larger than 100 MB together."
     const val INVALID_NAME: String = "That file doesn't have a valid filename."
 
     fun unsupportedType(name: String): String =
