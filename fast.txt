@@ -501,3 +501,39 @@ if __name__ == "__main__":
   Pass Assertion: Verifies CustomTabsIntent parameters, URL encoding, origin validation,
   and WebSocket upgrade proxy through companion viewer-relay.
 ================================================================================
+
+
+9. DUAL-ENGINE IMPLEMENTATION SPECIFICATION & DEFERRED EXECUTION PLAN
+--------------------------------------------------------------------------------
+Status: SPECIFICATION ONLY (Production implementation deferred per user directive).
+Target Branch: release/0.1.144 (or designated integration branch)
+
+9.1 Dual-Engine Architecture & Separation of Concerns
+------------------------------------------------------
+1. Obscura Engine (Autonomous Headless Tier):
+   - Scope: High-throughput, low-latency, DOM-level automation, scraping, and background task execution without visual GUI overhead.
+   - Packaging: Statically linked Rust binary (obscura / obscura.exe) providing CDP endpoint (default port 9222) and MCP stdio interface.
+   - Resource Ceiling: Target RSS footprint < 60 MB, cold-start < 50 ms.
+   - Security Invariant: Isolated execution sandbox; PATH sanitization; strict OpenBot branding without vendor/cloud relay dependencies.
+
+2. Qutebrowser Engine (Visual / Interactive Tier):
+   - Scope: GUI interactive browsing, human takeover, complex authenticated sessions, and visual web rendering.
+   - Environment: Runs on X11 DISPLAY :1 inside Linux container/VPS or local desktop environment; controlled via QtWebEngine CDP (port 9223) and Unix domain IPC socket bridge (/run/user/1000/openbot-qute-bridge.sock).
+   - CUA Integration: Dedicated bridge (cua-qutebrowser-bridge.py) translating semantic actions (open, click, type, scroll) into native Qutebrowser commands with zero collision on CUA driver input streams.
+
+9.2 Dual-Browser Routing Logic (server/browser-engine.ts & server/browser-runtime.ts)
+-------------------------------------------------------------------------------------
+- Routing Policy:
+  * Default routing target for headless tool calls and scraping: Obscura engine.
+  * Interactive takeovers, visual inspection, or explicit surface: "gui" requests: Qutebrowser (or Chromium desktop).
+- Batched Execution (browser_batch):
+  * Sequence multiple atomic actions (goto, evaluate, screenshot, fill, click) in a single round-trip over CDP/IPC to eliminate multi-step roundtrip network stalls.
+- Reclaim and Lifecycle Guards:
+  * Memory watchdog and idle-reclaim routines (watched() in browser-runtime.ts) must monitor both Obscura and Qutebrowser daemon PIDs, protecting against zombie processes and leaked IPC sockets.
+
+9.3 Verification Gates Prior to Activation
+------------------------------------------
+- Gate A: Static link checks ensuring zero foreign dynamic library dependencies (MinGW / non-MSVC DLL leaks on Windows).
+- Gate B: Clean cold-start, multi-frame capture, and memory eviction stress tests under bounded cgroup memory limits.
+- Gate C: Strict OpenBot branding compliance (no legacy omb_ / maus_ tokens; no cloud relay or vendor hosting dependencies).
+================================================================================
