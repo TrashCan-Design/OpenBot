@@ -49,11 +49,11 @@ services:
       timeout: 5s
       retries: 3
 
-  # Legacy alias fallback for existing tooling and test suites
   omb:
+    <<: *openbot
     init: true
     shm_size: 512m
-    image: ghcr.io/trashcan-design/openbot:latest
+    ports: []
     profiles: ["fallback"]
 
   caddy:

@@ -79,6 +79,9 @@ describe("the per-launch control token", () => {
     expect((await ask("POST", "/pairing", {}, undefined, { "x-openmausbot-control-token": CONTROL_TOKEN.slice(1) })).status).toBe(403);
     expect((await ask("GET", "/state", {}, undefined, { "x-openbot-control-token": CONTROL_TOKEN })).status).toBe(200);
     expect((await ask("GET", "/state", {}, undefined, { "x-openmausbot-control-token": CONTROL_TOKEN })).status).toBe(200);
+    expect((await ask("GET", "/state", {}, undefined, { "x-openbot-control-token": "", "x-openmausbot-control-token": CONTROL_TOKEN })).status).toBe(200);
+    expect((await ask("GET", "/state", {}, undefined, { "x-openbot-control-token": "invalid", "x-openmausbot-control-token": CONTROL_TOKEN })).status).toBe(200);
+    expect((await ask("GET", "/state", {}, undefined, { "x-openbot-control-token": CONTROL_TOKEN, "x-openmausbot-control-token": "invalid" })).status).toBe(200);
     expect(devices.pairing()).toBeNull();
   });
 

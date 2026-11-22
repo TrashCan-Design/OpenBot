@@ -216,8 +216,10 @@ export function createControlServer(options: ControlOptions): Server {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html) });
       return res.end(html);
     }
-    const presentedToken = req.headers[CONTROL_TOKEN_HEADER] ?? req.headers[LEGACY_CONTROL_TOKEN_HEADER];
-    if (!tokenMatches(presentedToken, options.controlToken())) {
+    const tokenValid =
+      tokenMatches(req.headers[CONTROL_TOKEN_HEADER], options.controlToken()) ||
+      tokenMatches(req.headers[LEGACY_CONTROL_TOKEN_HEADER], options.controlToken());
+    if (!tokenValid) {
       return json(res, 403, { error: "forbidden: open the companion's control page from the link it printed" });
     }
     if (method === "GET" && path === "/state") return json(res, 200, companionState(options));

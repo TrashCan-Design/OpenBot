@@ -608,6 +608,15 @@ describe("restoring exactly one browser profile", () => {
     expect(readFileSync(path, "utf8")).toBe('{"profile":"/fixture/shared"}');
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it("prefers openbot-managed-config.json over legacy omb-managed-config.json when both exist", async () => {
+    const { directory, options } = fixture();
+    const legacyPath = join(directory, "..", "omb-managed-config.json");
+    const openbotPath = join(directory, "..", "openbot-managed-config.json");
+    writeFileSync(legacyPath, '{"profile":"/fixture/legacy"}');
+    writeFileSync(openbotPath, "{}\n");
+    await expect(prepareBrowserSessionState("fixture-browser", "work", options)).resolves.not.toThrow();
+  });
 });
 
 describe("finding the browser engine", () => {
