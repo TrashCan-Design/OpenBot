@@ -951,8 +951,8 @@ export async function containerComputerAction(
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): Promise<ContainerComputerStatus> {
   screenshotStatusCache.delete(target.key);
-  pendingContainerFrames.delete(target.key);
   const before = await containerComputerStatus(runner, platform, target);
+  pendingContainerFrames.delete(target.key);
   const runtime = before.runtime;
   if (!runtime) throw Object.assign(new Error(before.problem ?? "No container runtime is installed"), { status: 409 });
   if (!before.daemonUp) throw Object.assign(new Error(before.problem ?? `${runtime} is not running`), { status: 409 });
@@ -1042,10 +1042,11 @@ export async function containerComputerFrame(
   platform: NodeJS.Platform = process.platform,
   target: LocalVmTarget = SHARED_LOCAL_VM_TARGET,
 ): Promise<{ png: string; format: "png" | "jpeg" }> {
-  const pending = pendingContainerFrames.get(target.key);
-  if (pending) return pending;
-
   const cacheable = runner === sh && platform === process.platform;
+  if (cacheable) {
+    const pending = pendingContainerFrames.get(target.key);
+    if (pending) return pending;
+  }
   const capture = async (): Promise<{ png: string; format: "png" | "jpeg" }> => {
     const now = Date.now();
     const cached = screenshotStatusCache.get(target.key);

@@ -53,4 +53,22 @@ describe("splitReplyBlocks", () => {
     expect(splitReplyBlocks(multiFence)).toEqual([{ kind: "prose", text: multiFence }]);
     expect(splitReplyBlocks("| just | pipes |\nno delimiter")).toEqual([{ kind: "prose", text: "| just | pipes |\nno delimiter" }]);
   });
+
+  it("does not enter code fence mode when backtick fence has backticks in info string", () => {
+    const invalidFence = "``` foo ` bar\n" + table + "\n```";
+    expect(splitReplyBlocks(invalidFence)).toEqual([
+      { kind: "prose", text: "``` foo ` bar" },
+      { kind: "table", text: table },
+      { kind: "prose", text: "```" },
+    ]);
+    const validTildeFence = "~~~ foo ` bar\n" + table + "\n~~~";
+    expect(splitReplyBlocks(validTildeFence)).toEqual([{ kind: "prose", text: validTildeFence }]);
+
+    const indentedInvalidFence = "   ``` info`extra\n" + table + "\n```";
+    expect(splitReplyBlocks(indentedInvalidFence)).toEqual([
+      { kind: "prose", text: "   ``` info`extra" },
+      { kind: "table", text: table },
+      { kind: "prose", text: "```" },
+    ]);
+  });
 });

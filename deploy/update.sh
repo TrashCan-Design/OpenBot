@@ -100,7 +100,8 @@ ask() {
   [ -t 4 ] || printf '\n' >&3 2>/dev/null
   printf '%s' "$answer"
 }
-compose() { docker compose "$@"; }
+docker() { command docker "$@" 9>&-; }
+compose() { docker compose "$@" 9>&-; }
 container() { compose ps -aq "$SERVICE" 2>/dev/null | head -n 1; }
 inspect() { docker inspect -f "$1" "$2" 2>/dev/null; }
 image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
@@ -211,6 +212,10 @@ take_lock() {
     printf '%s\n' "$DIR cannot be written by this user, so the update could not keep its journal or change .env. Nothing was changed. Run it as the user who owns $DIR, or with sudo."
     exit 4
   fi
+  if ! command -v flock >/dev/null 2>&1; then
+    printf '%s\n' "flock is required to take an exclusive lock. Install util-linux or flock."
+    exit 4
+  fi
   if [ -d "$LOCK" ]; then
     local other
     other=$(cat "$LOCK/pid" 2>/dev/null || true)
@@ -221,18 +226,24 @@ take_lock() {
     rm -rf "$LOCK"
   fi
   exec 9>>"$LOCK"
-  if ! flock -n 9; then
-    local other
-    other=$(cat "$LOCK" 2>/dev/null || true)
-    if [ -n "$other" ]; then
-      printf '%s\n' "An update is already running here (process $other). Wait for it to finish."
-    else
-      printf '%s\n' "Another update took the lock in $LOCK just now. Wait for it to finish."
+  local flock_status=0
+  flock -n 9 || flock_status=$?
+  if [ "$flock_status" -ne 0 ]; then
+    if [ "$flock_status" -eq 1 ]; then
+      local other
+      other=$(cat "$LOCK" 2>/dev/null || true)
+      if [ -n "$other" ]; then
+        printf '%s\n' "An update is already running here (process $other). Wait for it to finish."
+      else
+        printf '%s\n' "Another update took the lock in $LOCK just now. Wait for it to finish."
+      fi
+      exit 3
     fi
-    exit 3
+    printf '%s\n' "flock failed with exit status $flock_status."
+    exit 4
   fi
   echo $$ >"$LOCK"
-  trap 'rm -f "$LOCK"' EXIT
+  trap 'exec 9>&- 2>/dev/null || true' EXIT
 }
 
 # Helpers run in a short-lived container from the server's own image, as root and without a network.
@@ -241,7 +252,7 @@ helper() { # image, then `-v` mounts as source:target[:ro], then `--` and the sh
   shift
   while [ "$1" != -- ]; do mounts+=(-v "$1"); shift; done
   shift
-  docker run --rm --network none --user 0:0 --label com.openbot.role=update-helper "${mounts[@]}" --entrypoint sh "$image" -c "$1"
+  docker run --rm --network none --user 0:0 --label com.openbot.role=update-helper "${mounts[@]}" --entrypoint sh "$image" -c "$1" 9>&-
 }
 # `same A B` succeeds when the two folders hold the same entries and every file has the same checksum.
 VERIFY='manifest() { (cd "$1" && find . -print | LC_ALL=C sort && find . -type f -exec sha256sum {} + | LC_ALL=C sort); }
@@ -263,7 +274,7 @@ make_backup_volume() { # name image
   docker volume create --label "$BACKUP_ROLE" --label "com.openbot.project=$J_project" --label "com.openbot.data=$J_data" --label "com.openbot.image=$2" "$1" >/dev/null
 }
 copy_aside() { # data backup image: copy, then check the copy against the data, file by file
-  docker run --rm --network none --user 0:0 --label com.openbot.role=update-helper -v "$1:/from:ro" -v "$2:/to" --entrypoint cp "$3" -a /from/. /to/ || return 1
+  docker run --rm --network none --user 0:0 --label com.openbot.role=update-helper -v "$1:/from:ro" -v "$2:/to" --entrypoint cp "$3" -a /from/. /to/ 9>&- || return 1
   helper "$3" "$1:/from:ro" "$2:/to:ro" -- "$VERIFY"'same /from /to'
 }
 # Every copy of this install's data but the one this update made: dropped once that one has been checked.
@@ -521,6 +532,7 @@ wait_whole() {
 }
 
 finish() {
+  exec 9>&- 2>/dev/null || true
   cp "$JOURNAL" "$LAST.tmp" && mv "$LAST.tmp" "$LAST"
   rm -f "$JOURNAL"
   say "Updated from $(old_name) to $(new_name)."

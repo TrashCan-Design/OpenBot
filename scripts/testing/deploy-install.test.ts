@@ -248,6 +248,7 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
         STATE="$DIR/.update"
         LOCK="$STATE/lock"
         take_lock
+        [ -f "$LOCK" ] && [ "$(cat "$LOCK")" = "$$" ] && printf 'parent_locked:%s\n' "$$"
         (
           take_lock
         )
@@ -255,8 +256,119 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
       UPDATE_SCRIPT,
       dir,
     ], { encoding: "utf8" });
+    expect(res.stdout).toMatch(/parent_locked:\d+/);
     expect(res.status).toBe(3);
     expect(res.stdout).toMatch(/already running|took the lock/);
+  });
+
+  it("fails with exit code 4 when flock is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-no-flock-"));
+    dirs.push(dir);
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        command() { if [ "$1" = "-v" ] && [ "$2" = "flock" ]; then return 1; fi; builtin command "$@"; }
+        take_lock
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(4);
+    expect(res.stdout).toContain("flock is required to take an exclusive lock.");
+  });
+
+  it("fails with exit code 4 and does not report lock contention when flock exits with non-1 error status", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-flock-err-"));
+    dirs.push(dir);
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        flock() { return 127; }
+        take_lock
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(4);
+    expect(res.stdout).toContain("flock failed with exit status 127.");
+    expect(res.stdout).not.toContain("already running");
+    expect(res.stdout).not.toContain("took the lock");
+  });
+
+  it("retains lock file across sequential updates without unlinking inode", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-seq-"));
+    dirs.push(dir);
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        (
+          take_lock
+        )
+        [ -f "$LOCK" ] || exit 10
+        inode1=$(stat -c %i "$LOCK" 2>/dev/null || stat -f %i "$LOCK")
+        (
+          take_lock
+        )
+        [ -f "$LOCK" ] || exit 11
+        inode2=$(stat -c %i "$LOCK" 2>/dev/null || stat -f %i "$LOCK")
+        [ "$inode1" = "$inode2" ] || exit 12
+        printf 'retained_inode:%s\n' "$inode1"
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/retained_inode:\d+/);
+  });
+
+  it("does not leak file descriptor 9 to docker and child commands", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-fd-leak-"));
+    const binDir = mkdtempSync(join(tmpdir(), "openbot-mock-bin-"));
+    dirs.push(dir, binDir);
+    writeFileSync(
+      join(binDir, "docker"),
+      `#!/usr/bin/env bash
+if [ -e /dev/fd/9 ] || [ -e /proc/self/fd/9 ]; then
+  echo "fd9-leaked"
+else
+  echo "fd9-closed"
+fi
+`,
+      { mode: 0o755 },
+    );
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        PATH="$1:$PATH"
+        eval "$(sed -n '/^docker() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^compose() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        DIR="$2"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        take_lock
+        docker ps
+        compose ps
+      `,
+      UPDATE_SCRIPT,
+      binDir,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("fd9-closed");
+    expect(res.stdout).not.toContain("fd9-leaked");
   });
 
   it("reclaims regular lock file with stale PID and overwrites with current PID", () => {

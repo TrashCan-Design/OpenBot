@@ -225,7 +225,10 @@ describe("VPS companion viewer relay", () => {
       return true;
     });
     await vm.visit();
-    expect((await openViewer(vm.port, vm.path)).response).toContain("404 Not Found");
+    const { client, response } = await openViewer(vm.port, vm.path);
+    expect(response).toMatch(/^HTTP\/1\.1 404 /);
+    expect(response).toContain("404 Not Found");
+    expect(client.destroyed).toBe(true);
     expect(vm.upgrades).toHaveLength(1);
   });
 
@@ -234,15 +237,12 @@ describe("VPS companion viewer relay", () => {
     const listener = (err: unknown) => { unhandledRejection = err; };
     process.on("unhandledRejection", listener);
     try {
-      const rejectingPromise = new Proxy(Promise.resolve(false), {
-        get(target, prop, receiver) {
-          if (prop === "catch") return () => Promise.reject(new Error("lease check exploded"));
-          return Reflect.get(target, prop, receiver);
-        },
-      });
-      const rejectingCheck: ControlCheck = (() => rejectingPromise) as unknown as ControlCheck;
+      const rejectingCheck: ControlCheck = (() => ({
+        catch: () => Promise.reject(new Error("lease check exploded")),
+      })) as unknown as ControlCheck;
       const vm = await localVmViewer(rejectingCheck);
       const { client, response } = await openViewer(vm.port, vm.path);
+      expect(response).toMatch(/^HTTP\/1\.1 502 /);
       expect(response).toContain("502 Bad Gateway");
       expect(response).toContain("viewer lease check failed");
       expect(client.destroyed).toBe(true);

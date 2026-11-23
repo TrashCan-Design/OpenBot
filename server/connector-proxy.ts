@@ -22,17 +22,26 @@ import { capToolListResult, toolLimitFromEnv } from "./tool-count-limit.ts";
 
 type Json = Record<string, unknown>;
 
-const UPSTREAM = process.env.OMB_CONNECTOR_UPSTREAM_URL ?? "";
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_CONNECTOR_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
-const ALLOWED_TOOLS = parseConnectorAllowedToolsEnv(process.env[CONNECTOR_ALLOWED_TOOLS_ENV]);
-const SERVICE_SLUGS = parseConnectorServiceSlugsEnv(process.env[CONNECTOR_SERVICE_SLUGS_ENV]);
+const UPSTREAM = process.env.OPENBOT_CONNECTOR_UPSTREAM_URL ?? process.env.OMB_CONNECTOR_UPSTREAM_URL ?? "";
+const HARNESS = process.env.OPENBOT_HARNESS_URL ?? process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = process.env.OPENBOT_BOT_ID ?? process.env.OMB_BOT_ID ?? "";
+const THREAD_ID = process.env.OPENBOT_THREAD_ID ?? process.env.OMB_THREAD_ID ?? "";
+const TOKEN = process.env.OPENBOT_CONNECTOR_TOKEN ?? process.env.OMB_CONNECTOR_TOKEN ?? process.env.OPENBOT_COMMS_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
+const ALLOWED_TOOLS = parseConnectorAllowedToolsEnv(
+  process.env.OPENBOT_CONNECTOR_ALLOWED_TOOLS ?? process.env[CONNECTOR_ALLOWED_TOOLS_ENV],
+);
+const SERVICE_SLUGS = parseConnectorServiceSlugsEnv(
+  process.env.OPENBOT_CONNECTOR_SERVICE_SLUGS ?? process.env[CONNECTOR_SERVICE_SLUGS_ENV],
+);
 const SCHEMA_PROFILE = toolSchemaProfileFromEnv(process.env);
 const TOOL_LIMIT = toolLimitFromEnv(process.env);
-const APP_TOOLS = parseAppToolsEnv(process.env[APP_TOOLS_ENV]);
-const APP_TOOL_NAMES = process.env[APP_TOOL_NAMES_ENV] === "dotted" ? "dotted" : "plain";
+const APP_TOOLS = parseAppToolsEnv(
+  process.env.OPENBOT_CONNECTOR_APP_TOOLS ?? process.env[APP_TOOLS_ENV],
+);
+const APP_TOOL_NAMES =
+  (process.env.OPENBOT_CONNECTOR_APP_TOOL_NAMES ?? process.env[APP_TOOL_NAMES_ENV]) === "dotted"
+    ? "dotted"
+    : "plain";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
@@ -40,7 +49,9 @@ const TOOLS_LIST_RETRY_MS = 500;
 
 function parsedHeaders(): Record<string, string> {
   try {
-    const value: unknown = JSON.parse(process.env.OMB_CONNECTOR_UPSTREAM_HEADERS ?? "{}");
+    const value: unknown = JSON.parse(
+      process.env.OPENBOT_CONNECTOR_UPSTREAM_HEADERS ?? process.env.OMB_CONNECTOR_UPSTREAM_HEADERS ?? "{}",
+    );
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     return Object.fromEntries(
       Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),

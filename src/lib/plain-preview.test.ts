@@ -31,6 +31,16 @@ describe("plainPreviewText", () => {
     ["Run `a\\*b` here", "Run a\\*b here"],
     ["~~~\n# not a heading\n- not a list\n~~~\nafter", "# not a heading - not a list after"],
     ["![plot](/charts/a_(b).png) attached", "plot attached"],
+    ["-", "-"],
+    ["=", "="],
+    ["===", "==="],
+    ["alpha\n\n-\n\nbeta", "alpha - beta"],
+    ["alpha\n\n=\n\nbeta", "alpha = beta"],
+    ["alpha\n\n--\n\nbeta", "alpha -- beta"],
+    ["Heading\n=", "Heading"],
+    ["Heading\n-", "Heading"],
+    ["Heading\n--", "Heading"],
+    ["Heading 1\n===\nHeading 2\n---", "Heading 1 Heading 2"],
   ])("reads %j as plain text", (input, expected) => {
     expect(plainPreviewText(input)).toBe(expected);
   });

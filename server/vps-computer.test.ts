@@ -27,6 +27,10 @@ import {
 import { PIDS_LIMIT } from "./container-limits.ts";
 import type { AppConfig } from "./config.ts";
 import {
+  OPENBOT_VPS_CONTAINER_LABEL,
+  OPENBOT_VPS_ENVIRONMENT_LABEL,
+  OPENBOT_VPS_MANAGED_LABEL,
+  OPENBOT_VPS_VIEWER_LABEL,
   VPS_CONTAINER_LABEL,
   VPS_ENVIRONMENT_LABEL,
   VPS_IMAGE,
@@ -97,6 +101,7 @@ function fixture({
   cgroupnsMode,
   imageLabelsMatch = true,
   environmentId = null,
+  containerLabels,
 }: {
   image?: boolean;
   container?: boolean;
@@ -126,6 +131,7 @@ function fixture({
   cgroupnsMode?: string;
   imageLabelsMatch?: boolean;
   environmentId?: string | null;
+  containerLabels?: Record<string, string>;
 } = {}) {
   const name = vpsContainerName(BOT_ID);
   const provisioningArgs = vpsContainerRunArgs(name);
@@ -163,7 +169,7 @@ function fixture({
           Config: {
             Image: state.image ? VPS_IMAGE : "old-image",
             Env: [`VNC_PW=${argValue("VNC_PW") || "viewer-secret"}`],
-            Labels: {
+            Labels: containerLabels ?? {
               [VPS_MANAGED_LABEL]: managed ? "1" : "0",
               [VPS_CONTAINER_LABEL]: managed ? name : "other-container",
               [MANAGED_LABEL]: "1",
@@ -340,6 +346,24 @@ describe("VPS computer", () => {
     expect(fake.calls.some(({ args }) => args.includes("--screenshot-out-file"))).toBe(false);
   });
 
+  it("recognizes a container created with primary OpenBot labels (com.openbot.*)", async () => {
+    const name = vpsContainerName(BOT_ID);
+    const fake = fixture({
+      containerLabels: {
+        [OPENBOT_VPS_MANAGED_LABEL]: "1",
+        [OPENBOT_VPS_CONTAINER_LABEL]: name,
+        [OPENBOT_VPS_VIEWER_LABEL]: "1",
+        [MANAGED_LABEL]: "1",
+        [DRIVER_LABEL]: CUA_DRIVER_VERSION,
+        [BASE_IMAGE_LABEL]: BASE_IMAGE_DIGEST,
+        [IMAGE_LAYER_LABEL]: IMAGE_LAYER_VERSION,
+      },
+    });
+    const status = await vpsComputerStatus(CONFIG, BOT_ID, fake.runner);
+    expect(status.managed).toBe(true);
+    expect(status.imageMatches).toBe(true);
+  });
+
   it.each([
     { Memory: 1024 ** 3, MemorySwap: 2 * 1024 ** 3, NanoCpus: 4_000_000_000, PidsLimit: 1024, ShmSize: 1024 ** 3, OomKillDisable: true },
     { Memory: 0, MemorySwap: -1, NanoCpus: 0, PidsLimit: -1, ShmSize: 64 * 1024 ** 2, OomKillDisable: null },
@@ -475,6 +499,10 @@ describe("VPS computer", () => {
     expect(run).toContain("--cgroupns");
     expect(run[run.indexOf("--cgroupns") + 1]).toBe("private");
     expect(run.at(-1)).toBe(IMAGE_ID);
+    expect(run.join(" ")).toContain(`--label ${OPENBOT_VPS_MANAGED_LABEL}=1`);
+    expect(run.find((arg) => arg.startsWith(`${OPENBOT_VPS_ENVIRONMENT_LABEL}=`)))
+      .toMatch(/^com\.openbot\.environment=[0-9a-f-]{36}$/i);
+    expect(run.join(" ")).toContain(`--label ${OPENBOT_VPS_VIEWER_LABEL}=1`);
     expect(run.join(" ")).toContain(`--label ${VPS_MANAGED_LABEL}=1`);
     expect(run.find((arg) => arg.startsWith(`${VPS_ENVIRONMENT_LABEL}=`)))
       .toMatch(/^com\.openmausbot\.environment=[0-9a-f-]{36}$/i);

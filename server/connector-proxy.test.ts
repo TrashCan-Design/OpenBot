@@ -60,7 +60,7 @@ describe("connector MCP bridge", () => {
         response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "text", text: "accepted" }] } }));
       });
     });
-    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    const lines = start({ OPENBOT_CONNECTOR_UPSTREAM_URL: upstream });
     const unsafe = [
       '{"id":9007199254740993}',
       '{"id":-9007199254740993}',
@@ -259,7 +259,7 @@ describe("connector MCP bridge", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ jsonrpc: "2.0", id: 5, result: { tools: [manage, { name: "COMPOSIO_SEARCH_TOOLS" }] } }));
     });
-    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    const lines = start({ OPENBOT_CONNECTOR_UPSTREAM_URL: upstream });
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/list", params: {} })}\n`);
     const [listed, search] = (await nextJson(lines)).result.tools;
     expect(listed.inputSchema.required).toEqual(["toolkits"]);
@@ -299,7 +299,7 @@ describe("connector MCP bridge", () => {
       // Deliberately never respond. The proxy must abort this request and
       // return its local capability result instead of hanging OpenCode.
     });
-    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    const lines = start({ OPENBOT_CONNECTOR_UPSTREAM_URL: upstream });
     child!.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0",
       id: 11,
@@ -430,7 +430,7 @@ describe("connector MCP bridge", () => {
         response.end(JSON.stringify({ jsonrpc: "2.0", id, result: answers.shift() }));
       });
     });
-    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    const lines = start({ OPENBOT_CONNECTOR_UPSTREAM_URL: upstream });
     const call = (id: number) => child!.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0",
       id,
@@ -651,5 +651,17 @@ describe("connected-app tools by name", () => {
     expect(refused.result.isError).toBe(true);
     expect(refused.result.content[1].text).toContain('Call it again with the arguments its schema names, for example {"code_to_execute":"…"} with your own values.');
     expect(refused.result.content[1].text).toContain("it says nothing about which apps or tools exist, so do not tell the person a tool is missing. Connected apps you can use: gemini, gmail.");
+  });
+
+  it("falls back to OMB_CONNECTOR_UPSTREAM_URL when OPENBOT_CONNECTOR_UPSTREAM_URL is unset", async () => {
+    const upstream = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+    });
+    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    child!.stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n');
+    const result = await nextJson(lines);
+    expect(result.id).toBe(1);
+    expect(result.result.tools).toEqual([]);
   });
 });

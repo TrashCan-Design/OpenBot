@@ -24,7 +24,7 @@ export function plainPreviewText(text: string): string {
   out = out.replace(/^[ \t]{0,3}#{1,6}[ \t]*$/gm, "");
   out = out.replace(/^[ \t]*(?:>[ \t]?)+/gm, "");
   out = out.replace(/^[ \t]{0,3}(?:[-*_][ \t]*){3,}$/gm, "");
-  out = out.replace(/^[ \t]{0,3}(?:=+|-+)[ \t]*$/gm, "");
+  out = out.replace(/(^[ \t]*\S[^\n]*)\n[ \t]{0,3}(?:=+|-+)[ \t]*(?=\n|$)/gm, "$1");
   out = out.replace(/^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, "");
   out = out.replace(/^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$/gm, "");
   out = out.replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, (_row, cells: string) => cells.split("|").map((cell) => cell.trim()).filter(Boolean).join(" "));

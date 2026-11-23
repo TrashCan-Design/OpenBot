@@ -20,6 +20,10 @@ import {
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
+  OPENBOT_BASE_IMAGE_LABEL,
+  OPENBOT_DRIVER_LABEL,
+  OPENBOT_IMAGE_LAYER_LABEL,
+  OPENBOT_MANAGED_LABEL,
 } from "./container-computer.ts";
 import { PER_BOT_VPS_MEMORY, PIDS_LIMIT, considerSharedDesktopMemory, raisePidsLimit, sharedProvisionMemory } from "./container-limits.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
@@ -30,6 +34,11 @@ import { loadEnvironmentId } from "./environment.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 export const VPS_IMAGE = CUA_IMAGE;
+export const OPENBOT_VPS_MANAGED_LABEL = "com.openbot.vps";
+export const OPENBOT_VPS_CONTAINER_LABEL = "com.openbot.container";
+export const OPENBOT_VPS_ENVIRONMENT_LABEL = "com.openbot.environment";
+export const OPENBOT_VPS_VIEWER_LABEL = "com.openbot.vps-viewer";
+export const OPENBOT_VPS_CONTAINER_PREFIX = "openbot-vps";
 export const VPS_MANAGED_LABEL = "com.openmausbot.vps";
 export const VPS_CONTAINER_LABEL = "com.openmausbot.container";
 export const VPS_ENVIRONMENT_LABEL = "com.openmausbot.environment";
@@ -49,7 +58,7 @@ const COMMAND_TIMEOUT_KILL_GRACE_MS = COMMAND_TIMEOUT_TERM_GRACE_MS + 1_000;
 const CONTAINER_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/i;
 const FULL_CONTAINER_ID = /^[a-f0-9]{64}$/i;
-const MANAGED_VPS_CONTAINER_NAME = /^openmausbot-vps-[a-z0-9]{1,12}-[a-f0-9]{12}$/;
+const MANAGED_VPS_CONTAINER_NAME = /^(?:openbot-vps|openmausbot-vps)-[a-z0-9]{1,12}-[a-f0-9]{12}$/;
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/i;
 const SCREENSHOT_PATH = "/tmp/openmausbot-vps-preview.png";
 // The Cua XFCE base ships Pillow in /opt/venv; a container without it returns the original PNG.
@@ -554,11 +563,13 @@ async function computeVpsComputerStatus(
       Boolean(inspectedImageId) &&
       detail?.Image === inspectedImageId &&
       imageLabelsMatch(labels) &&
-      labels?.[VPS_VIEWER_LABEL] === VIEWER_VERSION;
-    const environmentLabel = labels?.[VPS_ENVIRONMENT_LABEL];
+      (labels?.[OPENBOT_VPS_VIEWER_LABEL] ?? labels?.[VPS_VIEWER_LABEL]) === VIEWER_VERSION;
+    const environmentLabel = labels?.[OPENBOT_VPS_ENVIRONMENT_LABEL] ?? labels?.[VPS_ENVIRONMENT_LABEL];
+    const isManaged = (labels?.[OPENBOT_VPS_MANAGED_LABEL] ?? labels?.[VPS_MANAGED_LABEL]) === "1";
+    const containerLabel = labels?.[OPENBOT_VPS_CONTAINER_LABEL] ?? labels?.[VPS_CONTAINER_LABEL];
     status.managed =
-      labels?.[VPS_MANAGED_LABEL] === "1" &&
-      labels?.[VPS_CONTAINER_LABEL] === status.container_name &&
+      isManaged &&
+      containerLabel === status.container_name &&
       (environmentLabel === undefined || environmentLabel === vpsEnvironmentId());
     if (status.managed && status.container_id) raisePidsLimit(status.container_id, detail?.HostConfig?.PidsLimit, run);
     const memoryLock = vpsLockKey(cfg, botId);
@@ -765,13 +776,15 @@ async function scanManagedVpsAlias(
         seenNames.has(name) ||
         !labels ||
         typeof labels !== "object" ||
-        (labels as Record<string, unknown>)[VPS_MANAGED_LABEL] !== "1" ||
-        (labels as Record<string, unknown>)[VPS_CONTAINER_LABEL] !== name
+        ((labels as Record<string, unknown>)[OPENBOT_VPS_MANAGED_LABEL] ?? (labels as Record<string, unknown>)[VPS_MANAGED_LABEL]) !== "1" ||
+        ((labels as Record<string, unknown>)[OPENBOT_VPS_CONTAINER_LABEL] ?? (labels as Record<string, unknown>)[VPS_CONTAINER_LABEL]) !== name
       ) {
         throw new Error("the VPS returned a managed container whose identity could not be verified");
       }
       const owner = ownerByName.get(name);
-      const environmentLabel = (labels as Record<string, unknown>)[VPS_ENVIRONMENT_LABEL];
+      const environmentLabel =
+        (labels as Record<string, unknown>)[OPENBOT_VPS_ENVIRONMENT_LABEL] ??
+        (labels as Record<string, unknown>)[VPS_ENVIRONMENT_LABEL];
       seenIds.add(listedId);
       seenNames.add(name);
       // Another installation may share this daemon: never return an id that would make its container removable.
@@ -831,6 +844,22 @@ export function vpsContainerRunArgs(containerName: string, imageRef = VPS_IMAGE,
     "-d",
     "--name",
     containerName,
+    "--label",
+    `${OPENBOT_VPS_MANAGED_LABEL}=1`,
+    "--label",
+    `${OPENBOT_VPS_CONTAINER_LABEL}=${containerName}`,
+    "--label",
+    `${OPENBOT_VPS_ENVIRONMENT_LABEL}=${vpsEnvironmentId()}`,
+    "--label",
+    `${OPENBOT_VPS_VIEWER_LABEL}=${VIEWER_VERSION}`,
+    "--label",
+    `${OPENBOT_MANAGED_LABEL}=1`,
+    "--label",
+    `${OPENBOT_DRIVER_LABEL}=${CUA_DRIVER_VERSION}`,
+    "--label",
+    `${OPENBOT_BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
+    "--label",
+    `${OPENBOT_IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
     "--label",
     `${VPS_MANAGED_LABEL}=1`,
     "--label",

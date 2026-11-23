@@ -47,8 +47,9 @@ export function splitReplyBlocks(text: string): ReplyBlock[] {
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
     const match = FENCE.exec(line);
-    const marker = match?.[1];
-    if (marker && (!fence || (marker[0] === fence[0] && marker.length >= fence.length && !match[2]?.trim()))) fence = fence ? null : marker;
+    let marker = match?.[1];
+    if (!fence && marker?.[0] === "`" && match?.[2]?.includes("`")) marker = undefined;
+    if (marker && (!fence || (marker[0] === fence[0] && marker.length >= fence.length && !match?.[2]?.trim()))) fence = fence ? null : marker;
     if (fence || marker || !PIPE_ROW.test(line) || !DELIMITER_ROW.test(lines[index + 1] ?? "")) {
       prose.push(line);
       continue;

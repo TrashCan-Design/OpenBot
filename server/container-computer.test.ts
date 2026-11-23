@@ -942,7 +942,7 @@ describe("Cua integration", () => {
     expect(frame.png.startsWith("data:")).toBe(false);
   });
 
-  it("shares overlapping frame captures of the same target without duplicate fetch", async () => {
+  it("does not share frame captures across uncacheable or different runner/platform args", async () => {
     const png = validPng;
     let release!: () => void;
     let entered!: () => void;
@@ -978,8 +978,8 @@ describe("Cua integration", () => {
 
     const frames = await Promise.all([first, second]);
     expect(frames[0]).toEqual(frames[1]);
-    expect(fake.calls.filter((c) => c.includes("get_desktop_state"))).toHaveLength(1);
-    expect(fake.calls.filter((c) => c.includes(SCREENSHOT_TRANSFER))).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.includes("get_desktop_state"))).toHaveLength(2);
+    expect(fake.calls.filter((c) => c.includes(SCREENSHOT_TRANSFER))).toHaveLength(2);
   });
 
   it("awaits in-flight frame capture before probing desktop health via CUA driver socket", async () => {
@@ -1171,6 +1171,54 @@ describe("containerComputerAction", () => {
     await containerComputerAction("start", fake.run, "linux");
     expect(fake.calls).toContain(`docker start ${CONTAINER}`);
     expect(fake.calls.some(call => call.includes(" rm ") || call.includes(" run "))).toBe(false);
+  });
+
+  it("awaits in-flight frame capture before clearing frame map and evaluating lifecycle action", async () => {
+    const png = validPng;
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const capturing = new Promise<void>((resolve) => { entered = resolve; });
+    let frameDone = false;
+    let actionRanBeforeFrameCompleted = false;
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "degraded", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: png.toString("base64"),
+      [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
+        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+      [`docker stop ${CONTAINER}`]: "",
+    });
+    let frameStarted = false;
+    const run: CommandRunner = async (cmd, args, timeout) => {
+      if (args.includes("get_desktop_state")) {
+        frameStarted = true;
+        entered();
+        await gate;
+      }
+      if (frameStarted && (args.includes("health_report") || args.includes("stop"))) {
+        if (!frameDone) actionRanBeforeFrameCompleted = true;
+      }
+      return fake.run(cmd, args, timeout);
+    };
+
+    const frame = containerComputerFrame(run, "linux").finally(() => { frameDone = true; });
+    await capturing;
+    const actionPromise = containerComputerAction("stop", run, "linux");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(actionRanBeforeFrameCompleted).toBe(false);
+    release();
+
+    await Promise.all([frame, actionPromise]);
+    expect(actionRanBeforeFrameCompleted).toBe(false);
   });
 });
 

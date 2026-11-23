@@ -616,6 +616,24 @@ describe("restoring exactly one browser profile", () => {
     writeFileSync(legacyPath, '{"profile":"/fixture/legacy"}');
     writeFileSync(openbotPath, "{}\n");
     await expect(prepareBrowserSessionState("fixture-browser", "work", options)).resolves.not.toThrow();
+    expect(vi.mocked(spawn)).toHaveBeenCalled();
+    const env = vi.mocked(spawn).mock.calls[0]?.[2]?.env;
+    expect(env?.AGENT_BROWSER_CONFIG).toBe(openbotPath);
+    expect(env?.AGENT_BROWSER_CONFIG).not.toBe(legacyPath);
+    expect(env?.AGENT_BROWSER_PROFILE).not.toBe("/fixture/legacy");
+    expect(env?.AGENT_BROWSER_PROFILE).toBeUndefined();
+    expect(readFileSync(openbotPath, "utf8")).toBe("{}\n");
+    expect(readFileSync(legacyPath, "utf8")).toBe('{"profile":"/fixture/legacy"}');
+
+    const integration = agentBrowserIntegration({
+      binaryPath: "fixture-browser",
+      session: "work",
+      encryptionKey: "key",
+      env: options.env,
+    });
+    expect(integration.env.AGENT_BROWSER_CONFIG).toBe(openbotPath);
+    expect(integration.env.AGENT_BROWSER_CONFIG).not.toBe(legacyPath);
+    expect(integration.env.AGENT_BROWSER_PROFILE).not.toBe("/fixture/legacy");
   });
 });
 
