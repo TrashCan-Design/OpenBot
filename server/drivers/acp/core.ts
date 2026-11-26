@@ -251,7 +251,12 @@ export interface AcpSupport {
   }): Promise<void>;
 }
 
-const envOr = (key: string, fallback: number): number => Number(process.env[key] ?? fallback);
+const envOr = (key: string, fallback: number, legacyKey?: string): number => {
+  const raw = process.env[key] ?? (legacyKey ? process.env[legacyKey] : undefined);
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
 const INIT_TIMEOUT = 300_000;
 const SESSION_CONFIG_TIMEOUT = 300_000;
 const NEW_SESSION_TIMEOUT = 300_000;
@@ -459,7 +464,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             for (const link of host.links) closeSession(link.threadId, "recycle");
           }
           host.recycle = null;
-        }, envOr("OMB_ACP_SHARED_RECYCLE_MS", 60_000));
+        }, envOr("OPENBOT_ACP_SHARED_RECYCLE_MS", 60_000, "OMB_ACP_SHARED_RECYCLE_MS"));
         host.recycle.unref?.();
       };
       const armIdle = (threadId: string) => {
@@ -563,8 +568,12 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           if (logged?.signal.kind === "retry"
               && now - logged.at > (logged.signal.delayMs ?? 60_000) + 120_000) logged = null;
           probing = true;
-          const sample = session.child.pid ? await sampleProcessTree(session.child.pid) : { cpuMs: null, connections: null };
-          probing = false;
+          let sample: ProcessSample;
+          try {
+            sample = session.child.pid ? await sampleProcessTree(session.child.pid) : { cpuMs: null, connections: null };
+          } finally {
+            probing = false;
+          }
           if (current.state.settled || session.current !== current) return;
           let next = classifyQuiet({
             logged: logged?.signal ?? null, context, sample, previous, sinceMs: previous ? now - previousAt : 0,
@@ -1314,9 +1323,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               }
               if (loaded) break;
               if (cursor && liveSessionId === cursor) {
-                session.current = null;
+                const previous = session;
+                previous.current = null;
                 closeSession(threadId, "reestablish");
-                session = launchSession();
+                try {
+                  session = launchSession();
+                } catch (error) {
+                  previous.current = current;
+                  throw error;
+                }
                 sessions.set(threadId, session);
                 session.current = current;
                 runtimeAcceptsImages = await handshake();

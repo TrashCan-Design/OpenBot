@@ -60,7 +60,7 @@ const CONTAINER_ID = /^[a-f0-9]{12,64}$/i;
 const FULL_CONTAINER_ID = /^[a-f0-9]{64}$/i;
 const MANAGED_VPS_CONTAINER_NAME = /^(?:openbot-vps|openmausbot-vps)-[a-z0-9]{1,12}-[a-f0-9]{12}$/;
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/i;
-const SCREENSHOT_PATH = "/tmp/openmausbot-vps-preview.png";
+const SCREENSHOT_PATH = "/tmp/openbot-vps-preview.png";
 // The Cua XFCE base ships Pillow in /opt/venv; a container without it returns the original PNG.
 const SCREENSHOT_TRANSFER = `/opt/venv/bin/python -I -c 'import base64, io, sys
 from PIL import Image
@@ -185,7 +185,7 @@ function containerNamePart(botId: string): string {
 
 export function vpsContainerName(botId: string): string {
   const hash = createHash("sha256").update(botId).digest("hex").slice(0, 12);
-  return `${VPS_CONTAINER_PREFIX}-${containerNamePart(botId)}-${hash}`;
+  return `${OPENBOT_VPS_CONTAINER_PREFIX}-${containerNamePart(botId)}-${hash}`;
 }
 
 export function vpsDockerArgs(alias: string, args: string[]): string[] {
@@ -981,7 +981,8 @@ async function waitForVpsReady(
     );
     if (budgetExpired) break;
     if (!driverAnswers && Date.now() < deadline) continue;
-    status = await computeVpsComputerStatus(cfg, botId, boundedRunner);
+    const next = await computeVpsComputerStatus(cfg, botId, boundedRunner);
+    if (!budgetExpired) status = next;
   }
   if (budgetExpired) return {
     ...status,
@@ -1185,6 +1186,21 @@ export async function inspectVpsForAuto(
   finally { if (pendingAutoInspections.get(key) === entry) pendingAutoInspections.delete(key); }
 }
 
+function reuseLiveTunnel(
+  botId: string,
+  existing: { child: ReturnType<typeof spawn>; joinUrl: string; expiry: ReturnType<typeof setTimeout>; viewers: number; localViewer: boolean } | undefined,
+  remoteViewer: boolean,
+): { joinUrl: string; state: "running" } | null {
+  if (!existing || existing.child.exitCode !== null || existing.child.killed) return null;
+  if (!remoteViewer) existing.localViewer = true;
+  if (!existing.viewers || existing.localViewer) {
+    clearTimeout(existing.expiry);
+    existing.expiry = setTimeout(() => stopDesktopTunnel(botId), existing.localViewer ? NATIVE_VIEWER_LIFETIME_MS : REMOTE_VIEWER_GRACE_MS);
+    existing.expiry.unref();
+  }
+  return { joinUrl: existing.joinUrl, state: "running" };
+}
+
 /** The loopback URL carries the container password in its fragment, which is never sent over HTTP. */
 export async function vpsComputerJoin(
   cfg: AppConfig,
@@ -1196,16 +1212,8 @@ export async function vpsComputerJoin(
   const alias = vpsSshAlias(cfg);
   if (!alias) throw Object.assign(new Error("VPS is not configured"), { status: 409 });
 
-  const existing = desktopTunnels.get(botId);
-  if (existing && existing.child.exitCode === null && !existing.child.killed) {
-    if (!remoteViewer) existing.localViewer = true;
-    if (!existing.viewers || existing.localViewer) {
-      clearTimeout(existing.expiry);
-      existing.expiry = setTimeout(() => stopDesktopTunnel(botId), existing.localViewer ? NATIVE_VIEWER_LIFETIME_MS : REMOTE_VIEWER_GRACE_MS);
-      existing.expiry.unref();
-    }
-    return { joinUrl: existing.joinUrl, state: "running" };
-  }
+  const reused = reuseLiveTunnel(botId, desktopTunnels.get(botId), remoteViewer);
+  if (reused) return reused;
   stopDesktopTunnel(botId);
 
   // Always re-inspect: a cached IP or password may predate a container replacement.
@@ -1258,6 +1266,12 @@ export async function vpsComputerJoin(
     throw Object.assign(new Error(`Could not open the VPS live desktop: ${detail}`), { status: 502 });
   }
 
+  const raced = reuseLiveTunnel(botId, desktopTunnels.get(botId), remoteViewer);
+  if (raced) {
+    if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
+    return raced;
+  }
+  stopDesktopTunnel(botId);
   const joinUrl = `http://127.0.0.1:${localPort}/vnc.html#autoconnect=true&resize=scale&password=${encodeURIComponent(connection.password)}`;
   const expiry = setTimeout(() => stopDesktopTunnel(botId), remoteViewer ? REMOTE_VIEWER_GRACE_MS : NATIVE_VIEWER_LIFETIME_MS);
   expiry.unref?.();
@@ -1372,7 +1386,7 @@ export async function vpsComputerScreenshot(
         "sh",
         "-c",
         SCREENSHOT_TRANSFER,
-        "openmausbot-preview",
+        "openbot-preview",
         SCREENSHOT_PATH,
       ]), { timeoutMs: 30_000 })).stdout.trim();
       const checked = wholeScreenshot(Buffer.from(encoded, "base64"));

@@ -1,9 +1,9 @@
 ================================================================================
-OPENBOT DUAL-ENGINE BROWSER & LINUX REMOTE DESKTOP INTEGRATION SPECIFICATION
-================================================================================
+OPENBOT DUAL-ENGINE BROWSER & LINUX REMOTE DESKTOP INTEGRATION SPECIFICATIONS
+=================================================================================
 Target File       : fast.txt
 Target Repository : https://github.com/TrashCan-Design/OpenBot
-Target Branch     : codex/windows-installer
+Target Branch     : release/0.1.144
 Integrated Stack  : 1. h4ckf0r0day/obscura (v0.2.6+ Rust Headless Engine)
                     2. qutebrowser/qutebrowser (Keyboard/IPC-Driven X11 GUI Browser)
                     3. OpenBot Linux Remote Desktop (trycua/xfce-cua VPS & Local VM)
@@ -26,7 +26,7 @@ TABLE OF CONTENTS
    4.2 Environment & Flag Sanitizer in server/browser-engine.ts
    4.3 Managed Config Generation (managedBrowserConfigPath in server/browser-engine.ts)
    4.4 Batched Macro Execution (browser_batch & run_steps in server/browser-runtime.ts)
-5. Subsystem 3: Windows Desktop App & Installer Integration (codex/windows-installer)
+5. Subsystem 3: Windows Desktop App & Installer Integration (release/0.1.144)
    5.1 Bundling Obscura for Windows in scripts/build-windows-browser-vendor.mjs
    5.2 Electron Builder & NSIS Packaging (electron-builder.yml & scripts/after-pack.mjs)
    5.3 Windows-to-Linux Remote Desktop Tunneling (SSH VPS & Local WSL2/Podman/Docker VM)
@@ -38,7 +38,8 @@ TABLE OF CONTENTS
    6.4 Low-Bandwidth Mobile Preview Pipeline (1280x720 JPEG SCREENSHOT_TRANSFER)
    6.5 Mobile-Specific Prompt & Touch-Takeover Mode Switching (Obscura -> Qutebrowser)
 7. Complete File-by-File Pseudocode & Production TypeScript/Python/Kotlin Patches
-8. End-to-End Verification Matrix & CI Test Gate (codex/windows-installer)
+8. End-to-End Verification Matrix & CI Test Gate (release/0.1.144)
+9. Dual-Engine Implementation Specification & Deferred Execution Plan
 ================================================================================
 
 
@@ -147,7 +148,7 @@ vision loops via heavy CUA drivers:
 3.2 Installing & Configuring Obscura Daemon in Linux Container
 - Supervised by runit / systemd under user `cua`:
   Binary: /usr/local/bin/obscura
-  Arguments: --headless --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1
+  Arguments: serve --port 9222 --stealth
   Profile Isolation: /home/cua/.config/obscura/profiles/:botId
   Health Probe: curl -s http://127.0.0.1:9222/json/version
 
@@ -271,7 +272,7 @@ vision loops via heavy CUA drivers:
 5.4 Smoke Validation Updates (scripts/smoke-browser-bundle.mjs)
 - Adds dual-engine validation suite:
   1. Verifies obscura.exe PE32+ binary header and matches provenance.json SHA-256.
-  2. Cold-start assertion: Starts Obscura with --headless; verifies socket readiness in <50ms.
+  2. Cold-start assertion: Starts Obscura with serve --port 9222 --stealth; verifies socket readiness in <50ms.
   3. RSS Memory Benchmark: Asserts daemon memory <60MB under load.
   4. Multi-bot isolation: Validates Bot A and Bot B run concurrently with isolated profiles.
   5. Clean shutdown: Verifies process-tree termination via taskkill /PID <pid> /T /F on Windows.

@@ -7,6 +7,8 @@ describe("isFormattedReply", () => {
     ["a numbered list", "1. Acme wants the invoice"],
     ["a heading", "## By sender\nAcme wrote twice."],
     ["a code fence", "The filter:\n```js\nmail.filter(Boolean)\n```"],
+    ["a four-backtick code fence", "````js\nmail.filter(Boolean)\n````"],
+    ["a tilde fence with backticks in its info string", "~~~ foo ` bar\nhello\n~~~"],
     ["a quote", "> I archived 31 newsletters."],
     ["a table", "| Sender | Emails |\n| --- | ---: |\n| Acme | 4 |"],
   ])("treats %s as formatted", (_label, text) => {
@@ -20,6 +22,8 @@ describe("isFormattedReply", () => {
     ["a pipe inside a sentence", "Pick red | blue"],
     ["a hashtag", "#launch went well"],
     ["a number that starts a line", "2024 was a good year."],
+    ["a backtick fence with backticks in its info string", "``` foo ` bar"],
+    ["a four-backtick fence with backticks in its info string", "```` foo ` bar"],
   ])("keeps %s as a chat line", (_label, text) => {
     expect(isFormattedReply(text)).toBe(false);
   });
@@ -70,5 +74,8 @@ describe("splitReplyBlocks", () => {
       { kind: "table", text: table },
       { kind: "prose", text: "```" },
     ]);
+
+    const insideValidFence = "```\n``` foo ` bar\n" + table + "\n```";
+    expect(splitReplyBlocks(insideValidFence)).toEqual([{ kind: "prose", text: insideValidFence }]);
   });
 });

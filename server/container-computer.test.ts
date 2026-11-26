@@ -21,6 +21,7 @@ import {
   OPENBOT_DRIVER_LABEL,
   OPENBOT_IMAGE_LAYER_LABEL,
   OPENBOT_MANAGED_LABEL,
+  OPENBOT_TARGET_LABEL,
   OPENBOT_WORKSPACE_LABEL,
   TARGET_LABEL,
   VM_WORKSPACE_DIR,
@@ -64,7 +65,7 @@ function runner(responses: Record<string, string | Error>) {
 }
 
 it("recognizes only a durable VM workspace directory as prior provisioning evidence", () => {
-  const root = mkdtempSync(join(tmpdir(), "omb-vm-workspace-"));
+  const root = mkdtempSync(join(tmpdir(), "openbot-vm-workspace-"));
   const target = { ...perBotLocalVmTarget("workspace-fixture"), workspaceDir: join(root, "workspace") };
   try {
     expect(localVmWorkspaceExists(target)).toBe(false);
@@ -543,6 +544,36 @@ describe("containerComputerStatus", () => {
     expect(fake.calls).not.toContain("container info --format {{.ServerVersion}}");
   });
 
+  it("handles a null image field in Apple container inspect without dropping ownership or security checks", async () => {
+    const fake = runner({
+      ...appleRuntime,
+      [`container image inspect ${IMAGE}`]: appleImageInspect([appleImageVariant(preparedLabels)]),
+      [`container inspect ${CONTAINER}`]: JSON.stringify([
+        {
+          configuration: {
+            image: null,
+            resources: { cpus: 2, memoryInBytes: 4 * 1024 * 1024 * 1024 },
+            publishedPorts: [{ hostAddress: "127.0.0.1", containerPort: 6901 }],
+            labels: {
+              [OPENBOT_MANAGED_LABEL]: "1",
+              [OPENBOT_WORKSPACE_LABEL]: "1",
+            },
+            mounts: [{ source: VM_WORKSPACE_DIR, destination: VM_WORKSPACE_GUEST, options: [] }],
+          },
+          status: { state: "running" },
+        },
+      ]),
+    });
+
+    const status = await containerComputerStatus(fake.run, "darwin");
+
+    expect(status.managed).toBe(true);
+    expect(status.imageMatches).toBe(false);
+    expect(status.persistence).toBe("durable");
+    expect(status.security).toBe("hardened");
+    expect(status.ready).toBe(false);
+  });
+
   it("does not report a running container as ready when its viewer is public", async () => {
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
@@ -861,7 +892,7 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain('migrate_profile "$HOME/.config/chromium" chromium');
     expect(dockerfile).toContain('migrate_profile "$HOME/.mozilla" mozilla');
     expect(dockerfile).toContain("SingletonLock");
-    expect(dockerfile).toContain(`${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"`);
+    expect(dockerfile).toContain(`${OPENBOT_IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"`);
     expect(dockerfile).toContain("did not become ready within 45 seconds");
     expect(dockerfile).not.toContain("while ! DISPLAY=:1 xset q");
   });
@@ -891,7 +922,7 @@ describe("Cua integration", () => {
   it("captures the preview through Cua Driver rather than xdotool or VNC", async () => {
     const screenshotCall =
       `${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-      "--screenshot-out-file /tmp/openmausbot-preview.png";
+      "--screenshot-out-file /tmp/openbot-preview.png";
     const png = validPng;
     const fake = runner({
       "/usr/bin/which docker": "docker\n",
@@ -905,7 +936,7 @@ describe("Cua integration", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [screenshotCall]: "{}\n",
-      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: png.toString("base64"),
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: png.toString("base64"),
     });
 
     const image = await containerComputerScreenshot(fake.run, "linux");
@@ -932,8 +963,8 @@ describe("Cua integration", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
-      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+        "--screenshot-out-file /tmp/openbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: "jpeg:" + png.toString("base64"),
     });
 
     const frame = await containerComputerFrame(fake.run, "linux");
@@ -960,8 +991,8 @@ describe("Cua integration", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
-      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+        "--screenshot-out-file /tmp/openbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: "jpeg:" + png.toString("base64"),
     });
     const run: CommandRunner = async (cmd, args, timeout) => {
       if (args.includes("get_desktop_state")) {
@@ -1002,8 +1033,8 @@ describe("Cua integration", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
-      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+        "--screenshot-out-file /tmp/openbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: "jpeg:" + png.toString("base64"),
     });
     const run: CommandRunner = async (cmd, args, timeout) => {
       if (args.includes("get_desktop_state")) {
@@ -1023,6 +1054,69 @@ describe("Cua integration", () => {
 
     await Promise.all([frame, statusPromise]);
     expect(probedAfterFrame).toBe(true);
+  });
+
+  it("awaits all overlapping uncacheable frame captures even when a later capture finishes first", async () => {
+    const png = validPng;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let firstEntered!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const firstCapturing = new Promise<void>((resolve) => { firstEntered = resolve; });
+    const secondCapturing = new Promise<void>((resolve) => { secondEntered = resolve; });
+    let firstDone = false;
+    let probedAfterFirst = false;
+    const fake = runner({
+      "/usr/bin/which docker": "docker\n",
+      "/usr/bin/which podman": new Error("missing"),
+      "docker info --format {{.ServerVersion}}": "29\n",
+      [`docker image inspect ${IMAGE}`]: preparedImageInspect(),
+      [`docker inspect ${CONTAINER}`]: readyInspect(),
+      [versionProbe]: `cua-driver ${CUA_DRIVER_VERSION}\n`,
+      [statusProbe]: "running\n",
+      [healthProbe]: JSON.stringify({ schema_version: "1", overall: "degraded", checks: [] }),
+      [readinessProbe]: "{}\n",
+      [readinessRead]: png.toString("base64"),
+      [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
+        "--screenshot-out-file /tmp/openbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: "jpeg:" + png.toString("base64"),
+    });
+    let captureCalls = 0;
+    const run: CommandRunner = async (cmd, args, timeout) => {
+      if (args.includes("get_desktop_state")) {
+        captureCalls += 1;
+        if (captureCalls === 1) {
+          firstEntered();
+          await firstGate;
+        } else if (captureCalls === 2) {
+          secondEntered();
+          await secondGate;
+        }
+      }
+      if (args.includes("health_report")) {
+        probedAfterFirst = firstDone;
+      }
+      return fake.run(cmd, args, timeout);
+    };
+
+    const first = containerComputerFrame(run, "linux").finally(() => { firstDone = true; });
+    await firstCapturing;
+    const second = containerComputerFrame(run, "linux");
+    await secondCapturing;
+
+    // Finish the second capture before starting status so only the first capture remains in flight.
+    releaseSecond();
+    await second;
+
+    const statusPromise = containerComputerStatus(run, "linux");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(probedAfterFirst).toBe(false);
+    releaseFirst();
+
+    await Promise.all([first, statusPromise]);
+    expect(probedAfterFirst).toBe(true);
   });
 });
 
@@ -1193,8 +1287,8 @@ describe("containerComputerAction", () => {
       [readinessProbe]: "{}\n",
       [readinessRead]: png.toString("base64"),
       [`${driverExec} call get_desktop_state {} --socket ${CUA_SOCKET} ` +
-        "--screenshot-out-file /tmp/openmausbot-preview.png"]: "{}\n",
-      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openmausbot-preview /tmp/openmausbot-preview.png`]: "jpeg:" + png.toString("base64"),
+        "--screenshot-out-file /tmp/openbot-preview.png"]: "{}\n",
+      [`docker exec ${CONTAINER} sh -c ${SCREENSHOT_TRANSFER} openbot-preview /tmp/openbot-preview.png`]: "jpeg:" + png.toString("base64"),
       [`docker stop ${CONTAINER}`]: "",
     });
     let frameStarted = false;
@@ -1241,7 +1335,7 @@ describe("setupCommands", () => {
     const command = ["docker", ...args].join(" ");
 
     expect(command).toContain(`--name ${target.containerName}`);
-    expect(command).toContain(`--label ${TARGET_LABEL}=${target.label}`);
+    expect(command).toContain(`--label ${OPENBOT_TARGET_LABEL}=${target.label}`);
     expect(command).toContain(`source=${target.workspaceDir},target=${VM_WORKSPACE_GUEST}`);
     expect(command).toContain("-p 127.0.0.1::6901");
     expect(command).not.toContain("127.0.0.1:6080:6901");
@@ -1277,9 +1371,9 @@ describe("setupCommands", () => {
     expect(command).toContain("--cpus 2 --pids-limit 4096");
     expect(command).toContain("--ipc private --cgroupns private");
     expect(command).toContain("--cap-drop ALL --cap-add SETUID --cap-add SETGID");
-    expect(command).toContain(`--label ${MANAGED_LABEL}=1`);
-    expect(command).toContain(`--label ${DRIVER_LABEL}=${CUA_DRIVER_VERSION}`);
-    expect(command).toContain(`--label ${WORKSPACE_LABEL}=1`);
+    expect(command).toContain(`--label ${OPENBOT_MANAGED_LABEL}=1`);
+    expect(command).toContain(`--label ${OPENBOT_DRIVER_LABEL}=${CUA_DRIVER_VERSION}`);
+    expect(command).toContain(`--label ${OPENBOT_WORKSPACE_LABEL}=1`);
     expect(command).toContain(`--hostname ${CONTAINER}`);
     expect(command).toContain(
       `--mount type=bind,source=${VM_WORKSPACE_DIR},target=${VM_WORKSPACE_GUEST}`,
@@ -1318,8 +1412,9 @@ describe("setupCommands", () => {
   });
 
   it("uses an explicit local image name so Podman never resolves the managed build on Docker Hub", () => {
-    expect(IMAGE).toMatch(/^localhost\/openmausbot\/cua-local-vm:/);
+    expect(IMAGE).toMatch(/^localhost\/openbot\/cua-local-vm:/);
     expect(setupCommands("podman", "darwin").run).toContain(IMAGE);
+    expect(setupCommands("podman", "darwin").run).not.toContain("docker.io/openbot");
     expect(setupCommands("podman", "darwin").run).not.toContain("docker.io/openmausbot");
   });
 

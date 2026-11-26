@@ -655,4 +655,31 @@ describe("automation reports", () => {
     expect(line?.automation?.executionThreadId).toBe("");
     expect(calledWithUndefined).toBe(false);
   });
+
+  it("safely handles a pending completed run without a threadId across replyOf, sentWith, and recovery", () => {
+    const f = fixture();
+    let calledWithUndefined = false;
+    const orig = f.store.activePath.bind(f.store);
+    f.store.activePath = ((threadId: string) => {
+      if (threadId === undefined) calledWithUndefined = true;
+      return orig(threadId);
+    }) as typeof f.store.activePath;
+
+    const quiet = f.finished(null, "Detached quiet", { status: "completed", threadId: undefined });
+    f.runs.get(quiet.id)!.report = { state: "pending" };
+    expect(() => f.create().flush()).not.toThrow();
+    expect(f.runs.get(quiet.id)!.report).toEqual({ state: "quiet" });
+
+    const failed = f.finished(null, "Detached recover", { status: "failed", threadId: undefined, error: "Transient" });
+    f.runs.get(failed.id)!.report = { state: "pending" };
+    const finishedAt = Date.UTC(2026, 9, 26, 2, 40);
+    const recovered = f.finished(null, "Detached recover", { status: "completed", threadId: undefined, finishedAt });
+    f.runs.get(recovered.id)!.report = { state: "pending" };
+
+    expect(() => f.create().flush()).not.toThrow();
+    const recLine = f.lines().find((msg: Message) => msg.automation?.runId === recovered.id);
+    expect(recLine?.automation?.recovered).toBe(true);
+    expect(recLine?.automation?.executionThreadId).toBe("");
+    expect(calledWithUndefined).toBe(false);
+  });
 });

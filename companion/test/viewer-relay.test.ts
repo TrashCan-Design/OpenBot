@@ -530,4 +530,71 @@ describe("VPS companion viewer relay", () => {
     ])).resolves.toBeUndefined();
     expect(response).not.toContain("101 Switching Protocols");
   });
+
+  it("closes a Local VM viewer fail-closed when its periodic lease check throws or rejects", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let unhandledRejection: unknown = null;
+    const listener = (err: unknown) => { unhandledRejection = err; };
+    process.on("unhandledRejection", listener);
+    try {
+      for (const mode of ["reject", "throw"] as const) {
+        let checks = 0;
+        const vm = await localVmViewer((() => {
+          if (checks++ === 0) return Promise.resolve(true);
+          if (mode === "throw") throw new Error("periodic sync explosion");
+          return { catch: () => Promise.reject(new Error("periodic async explosion")) };
+        }) as unknown as ControlCheck);
+        const { client, response } = await openViewer(vm.port, vm.path, "viewer-ready");
+        expect(response).toContain("101 Switching Protocols");
+        const closed = once(client, "close");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await closed;
+        expect((await openViewer(vm.port, vm.path)).response).toContain("404 Not Found");
+      }
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.off("unhandledRejection", listener);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps all 64 active sessions accessible and ignores unauthenticated lookups when full", async () => {
+    const viewer = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(`asset:${req.url}`);
+    });
+    servers.push(viewer);
+    const viewerPort = await listen(viewer);
+    const relay = new CompanionViewerRelay();
+    const device = { id: "device-1", cloudDesktopAccess: true };
+    const sidecar = createServer((req, res) => {
+      if (req.url === "/unauth") return relay.handleHttp(req, res, null);
+      if (req.url === "/denied") return relay.handleHttp(req, res, { id: "device-2", cloudDesktopAccess: false });
+      return relay.handleHttp(req, res, device);
+    });
+    servers.push(sidecar);
+    const sidecarPort = await listen(sidecar);
+
+    const paths: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      const rewritten = relay.rewriteJoinResponse(
+        `/api/bots/bot-${i}/computer/join`,
+        { joinUrl: `http://127.0.0.1:${viewerPort}/vnc.html` },
+        "device-1",
+      ) as { joinUrl: string };
+      paths.push(rewritten.joinUrl.split("#")[0]);
+    }
+
+    expect((await fetch(`http://127.0.0.1:${sidecarPort}/unauth`)).status).toBe(401);
+    expect((await fetch(`http://127.0.0.1:${sidecarPort}/denied`)).status).toBe(403);
+    expect((await fetch(`http://127.0.0.1:${sidecarPort}${paths[0]}`)).status).toBe(200);
+
+    const extra = relay.rewriteJoinResponse(
+      "/api/bots/bot-64/computer/join",
+      { joinUrl: `http://127.0.0.1:${viewerPort}/vnc.html` },
+      "device-1",
+    ) as { joinUrl: string };
+    expect((await fetch(`http://127.0.0.1:${sidecarPort}${paths[0]}`)).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${sidecarPort}${extra.joinUrl.split("#")[0]}`)).status).toBe(200);
+  });
 });

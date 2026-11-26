@@ -132,11 +132,15 @@ export class CompanionViewerRelay {
     this.#checkMs = options.checkIntervalMs ?? CONTROL_CHECK_MS;
   }
 
-  #prune(): void {
+  #pruneExpired(): void {
     const now = Date.now();
     for (const session of this.#sessions.values()) {
       if (session.expiresAt <= now) this.#remove(session);
     }
+  }
+
+  #pruneForInsert(): void {
+    this.#pruneExpired();
     while (this.#sessions.size >= MAX_SESSIONS) {
       const oldest = this.#sessions.values().next().value as ViewerSession | undefined;
       if (!oldest) break;
@@ -196,7 +200,7 @@ export class CompanionViewerRelay {
       throw new Error("a Local VM viewer needs a control lease");
     }
 
-    this.#prune();
+    this.#pruneForInsert();
     this.close(deviceId, botId);
     const id = randomBytes(24).toString("base64url");
     const session: ViewerSession = {
@@ -214,14 +218,21 @@ export class CompanionViewerRelay {
       const leaseHolds = () => check(deviceId, botId, lease).catch(() => false);
       session.leaseHolds = leaseHolds;
       let checking = false;
+      const failWatch = () => {
+        checking = false;
+        if (this.#isActive(session)) this.#remove(session);
+      };
       session.watch = setInterval(() => {
         if (checking || !session.sockets.size) return;
         checking = true;
-        leaseHolds()
-          .then((owned) => {
+        try {
+          void Promise.resolve(leaseHolds()).then((owned) => {
             checking = false;
             if (!owned && this.#isActive(session)) this.#remove(session);
-          });
+          }, failWatch);
+        } catch {
+          failWatch();
+        }
       }, this.#checkMs);
       session.watch.unref?.();
     }
@@ -235,7 +246,7 @@ export class CompanionViewerRelay {
   }
 
   #target(rawUrl: string | undefined, device: ViewerDevice | null): { session: ViewerSession; target: URL } | null {
-    this.#prune();
+    this.#pruneExpired();
     if (!device?.id || !device.cloudDesktopAccess) return null;
     const incoming = requestTarget(rawUrl);
     const match = incoming && VIEWER_PATH.exec(incoming.pathname);
@@ -259,9 +270,9 @@ export class CompanionViewerRelay {
   }
 
   handleHttp(req: IncomingMessage, res: ServerResponse, device: ViewerDevice | null): void {
-    const resolved = this.#target(req.url, device);
     if (!device) return sendJson(res, 401, { error: "pair this device first" });
     if (!device.cloudDesktopAccess) return sendJson(res, 403, { error: "cloud desktop access is off for this device" });
+    const resolved = this.#target(req.url, device);
     if (!resolved || req.method !== "GET") return sendJson(res, 404, { error: "viewer session not found" });
 
     const headers: Record<string, string> = { accept: String(req.headers.accept ?? "*/*") };

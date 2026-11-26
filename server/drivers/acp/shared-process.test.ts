@@ -179,6 +179,28 @@ describe("ACP threads sharing one agent process", () => {
     }
   });
 
+  it("prefers OPENBOT_ACP_SHARED_RECYCLE_MS over legacy OMB_ACP_SHARED_RECYCLE_MS", async () => {
+    const previousOpenBot = process.env.OPENBOT_ACP_SHARED_RECYCLE_MS;
+    const previousLegacy = process.env.OMB_ACP_SHARED_RECYCLE_MS;
+    process.env.OPENBOT_ACP_SHARED_RECYCLE_MS = "200";
+    process.env.OMB_ACP_SHARED_RECYCLE_MS = "60000";
+    try {
+      const f = await fixture();
+      await f.run("thread-a");
+      await f.run("thread-b");
+      const [first] = f.spawned;
+      expect((await f.run("thread-a", { sessionReset: true })).done).toMatchObject({ ok: true });
+      await exited(first!);
+      expect((await f.run("thread-b")).done).toMatchObject({ ok: true });
+      expect(f.spawned).toHaveLength(2);
+    } finally {
+      if (previousOpenBot === undefined) delete process.env.OPENBOT_ACP_SHARED_RECYCLE_MS;
+      else process.env.OPENBOT_ACP_SHARED_RECYCLE_MS = previousOpenBot;
+      if (previousLegacy === undefined) delete process.env.OMB_ACP_SHARED_RECYCLE_MS;
+      else process.env.OMB_ACP_SHARED_RECYCLE_MS = previousLegacy;
+    }
+  });
+
   it("never recycles a shared process while one of its sessions runs a turn", async () => {
     const previous = process.env.OMB_ACP_SHARED_RECYCLE_MS;
     process.env.OMB_ACP_SHARED_RECYCLE_MS = "200";

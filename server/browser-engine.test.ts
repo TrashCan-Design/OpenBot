@@ -195,6 +195,17 @@ describe("deleting one browser session's saved logins", () => {
     expect(vi.mocked(spawn).mock.calls.map((call) => call[1])).toEqual([["session", "list", "--json"], ["close"], ["session", "list", "--json"]]);
   });
 
+  it("escapes dotted session ids when removing temporary candidate files", async () => {
+    const { directory, options } = fixture();
+    const target = ".tmp/work.1-work.1-candidate-123.json.enc";
+    const unrelated = ".tmp/workX1-workX1-candidate-123.json.enc";
+    writeFileSync(join(directory, target), "dot session");
+    writeFileSync(join(directory, unrelated), "other session");
+    expect(await clearBrowserSessionState("fixture-browser", "work.1", options)).toBe(true);
+    expect(existsSync(join(directory, target))).toBe(false);
+    expect(readFileSync(join(directory, unrelated), "utf8")).toBe("other session");
+  });
+
   it("never sends close to a browser that is not running", async () => {
     const { options, running } = fixture();
     running.clear();
@@ -697,6 +708,34 @@ describe("finding the browser engine", () => {
     const external = join(tmpdir(), "external-engine");
     files.add(external);
     expect(resolveAgentBrowserBinary({ ...options, env: { ...env, OMB_AGENT_BROWSER_PATH: external } })).toBe(external);
+    expect(resolveAgentBrowserBinary({ ...options, env: { ...env, OPENBOT_AGENT_BROWSER_PATH: external, OMB_AGENT_BROWSER_PATH: join(tmpdir(), "missing") } })).toBe(external);
+    expect(resolveAgentBrowserBinary({ ...options, env: { ...env, OPENBOT_AGENT_BROWSER_PATH: " ", OMB_AGENT_BROWSER_PATH: external } })).toBe(external);
+  });
+
+  it("prefers OPENBOT_RESOURCES_PATH over OMB_RESOURCES_PATH and falls back when empty", () => {
+    const primaryRoot = join(tmpdir(), "openbot-resources");
+    const legacyRoot = join(tmpdir(), "omb-resources");
+    const primaryBundle = browserBundlePaths(join(primaryRoot, "browser-engine"), "linux-x64");
+    const legacyBundle = browserBundlePaths(join(legacyRoot, "browser-engine"), "linux-x64");
+    const files = new Set([
+      primaryBundle.directory, primaryBundle.engine, primaryBundle.chrome, primaryBundle.manifest, primaryBundle.licenses,
+      legacyBundle.directory, legacyBundle.engine, legacyBundle.chrome, legacyBundle.manifest, legacyBundle.licenses,
+    ]);
+    const exists = (p: string) => files.has(p);
+    expect(resolveAgentBrowserBinary({
+      env: { OPENBOT_RESOURCES_PATH: primaryRoot, OMB_RESOURCES_PATH: legacyRoot, PATH: "" },
+      platform: "linux", arch: "x64", exists,
+    })).toBe(primaryBundle.engine);
+    expect(resolveAgentBrowserBinary({
+      env: { OPENBOT_RESOURCES_PATH: "", OMB_RESOURCES_PATH: legacyRoot, PATH: "" },
+      platform: "linux", arch: "x64", exists,
+    })).toBe(legacyBundle.engine);
+    const spec = agentBrowserIntegration({
+      binaryPath: primaryBundle.engine, session: "isolated", encryptionKey: "key",
+      env: { OPENBOT_RESOURCES_PATH: primaryRoot, PATH: "" }, platform: "linux", arch: "x64",
+    });
+    expect(spec.env).not.toHaveProperty("OPENBOT_RESOURCES_PATH");
+    expect(spec.env).not.toHaveProperty("OMB_RESOURCES_PATH");
   });
 
   it("mounts the bundled browser with no download and keeps explicit Chrome overrides", async () => {
@@ -890,6 +929,20 @@ describe("installing the browser engine", () => {
     await expect(installAgentBrowserBinary({ dataDir, platform: "linux", asset, fetchImpl: async () => new Response(Buffer.from("hello")) })).rejects.toThrow(/SHA-256/u);
     await expect(installAgentBrowserBinary({ dataDir, platform: "linux", asset, fetchImpl: async () => new Response(Buffer.from("hi")) })).rejects.toThrow(/pinned size/u);
     expect(() => statSync(pinnedBinaryPath(dataDir, "linux"))).toThrow();
+  });
+
+  it("ignores an empty content-length header and still validates streamed size and digest", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "omb-engine-empty-cl-"));
+    scratch.push(dataDir);
+    const body = Buffer.from("#!/bin/sh\necho ok\n");
+    const asset = { target: "linux-x64", asset: "agent-browser-linux-x64", sha256: createHash("sha256").update(body).digest("hex"), bytes: body.length };
+    const installed = await installAgentBrowserBinary({
+      dataDir,
+      platform: "linux",
+      asset,
+      fetchImpl: async () => new Response(body, { headers: { "content-length": "" } }),
+    });
+    expect(readFileSync(installed, "utf8")).toContain("echo ok");
   });
 });
 

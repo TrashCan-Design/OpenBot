@@ -1,4 +1,4 @@
-// Cua-backed Local VM: OMB owns only the sandbox boundary; desktop automation is Cua Driver's (`cua-driver mcp` in the container).
+// Cua-backed Local VM: OpenBot owns only the sandbox boundary; desktop automation is Cua Driver's (`cua-driver mcp` in the container).
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync } from "node:fs";
@@ -29,7 +29,7 @@ export const BASE_IMAGE_DIGEST = "sha256:274eb636f5cf3fc58f705916ee72b7a701270b3
 export const BASE_IMAGE = `${BASE_IMAGE_REPOSITORY}@${BASE_IMAGE_DIGEST}`;
 // localhost/ is explicit: Podman prepends it to unqualified build tags and may then resolve the name on Docker Hub.
 // Image and container labels, not this mutable tag, decide compatibility.
-export const IMAGE_REPOSITORY = "localhost/openmausbot/cua-local-vm";
+export const IMAGE_REPOSITORY = "localhost/openbot/cua-local-vm";
 export const IMAGE_LAYER_VERSION = "7";
 export const IMAGE_LAYER_LABEL = "com.openmausbot.image-layer";
 export const OPENBOT_IMAGE_LAYER_LABEL = "com.openbot.image-layer";
@@ -188,10 +188,10 @@ RUN printf '%s\\n' \\
       'stderr_logfile=/var/log/supervisor/cua-driver.error.log' \\
       'priority=30' \\
       >> /etc/supervisor/supervisord.conf
-LABEL ${MANAGED_LABEL}="1" \\
-      ${DRIVER_LABEL}="${CUA_DRIVER_VERSION}" \\
-      ${BASE_IMAGE_LABEL}="${BASE_IMAGE_DIGEST}" \\
-      ${IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"
+LABEL ${OPENBOT_MANAGED_LABEL}="1" \\
+      ${OPENBOT_DRIVER_LABEL}="${CUA_DRIVER_VERSION}" \\
+      ${OPENBOT_BASE_IMAGE_LABEL}="${BASE_IMAGE_DIGEST}" \\
+      ${OPENBOT_IMAGE_LAYER_LABEL}="${IMAGE_LAYER_VERSION}"
 `;
 }
 
@@ -395,7 +395,7 @@ export function imageLabelsMatch(labels: Record<string, string> | undefined): bo
   );
 }
 
-/** Ownership ignores image/driver versions, so an older OMB container stays removable. */
+/** Ownership ignores image/driver versions, so an older OpenBot/OMB container stays removable. */
 export function containerOwnershipLabelsMatch(
   labels: Record<string, string> | undefined,
   target: LocalVmTarget,
@@ -483,6 +483,7 @@ export function cuaExecArgs(
 }
 
 const pendingContainerFrames = new Map<string, Promise<{ png: string; format: "png" | "jpeg" }>>();
+const inFlightContainerFrames = new Map<string, Set<Promise<{ png: string; format: "png" | "jpeg" }>>>();
 const screenshotStatusCache = new Map<
   string,
   { status: ContainerComputerStatus; expiresAt: number }
@@ -536,7 +537,7 @@ export async function containerComputerStatus(
           ? detail.configuration.image
           : detail?.configuration?.image?.reference ?? detail?.configuration?.imageReference;
       const appleImageId =
-        typeof detail?.configuration?.image === "object"
+        detail?.configuration?.image !== null && typeof detail?.configuration?.image === "object"
           ? normalizeImageId(detail.configuration.image.descriptor?.digest)
           : null;
       status.imageMatches =
@@ -606,8 +607,8 @@ export async function containerComputerStatus(
     status.persistence === "durable";
   if (canProbe) {
     if (!options.skipFrameWait) {
-      const capture = pendingContainerFrames.get(target.key);
-      if (capture) await capture.catch(() => {});
+      const active = inFlightContainerFrames.get(target.key);
+      if (active?.size) await Promise.allSettled(active);
     }
     try {
       const expected = `cua-driver ${CUA_DRIVER_VERSION}`;
@@ -852,17 +853,17 @@ export function containerRunArgs(
   }
   common.push(
     "--label",
-    `${MANAGED_LABEL}=1`,
+    `${OPENBOT_MANAGED_LABEL}=1`,
     "--label",
-    `${DRIVER_LABEL}=${CUA_DRIVER_VERSION}`,
+    `${OPENBOT_DRIVER_LABEL}=${CUA_DRIVER_VERSION}`,
     "--label",
-    `${BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
+    `${OPENBOT_BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
     "--label",
-    `${IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
+    `${OPENBOT_IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
     "--label",
-    `${WORKSPACE_LABEL}=1`,
+    `${OPENBOT_WORKSPACE_LABEL}=1`,
     "--label",
-    `${TARGET_LABEL}=${target.label}`,
+    `${OPENBOT_TARGET_LABEL}=${target.label}`,
   );
   if (runtime === "container") {
     // Apple container already places each Linux container in a lightweight VM.
@@ -935,7 +936,7 @@ function baseImagePullArgs(runtime: Runtime): string[] {
 
 async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
   await runner(runtime, baseImagePullArgs(runtime), 10 * 60_000);
-  const context = await mkdtemp(join(tmpdir(), "openmausbot-cua-image-"));
+  const context = await mkdtemp(join(tmpdir(), "openbot-cua-image-"));
   try {
     await writeFile(join(context, "Dockerfile"), managedImageDockerfile(), { mode: 0o600 });
     await runner(runtime, ["build", "-t", IMAGE, context], 10 * 60_000);
@@ -952,6 +953,8 @@ export async function containerComputerAction(
 ): Promise<ContainerComputerStatus> {
   screenshotStatusCache.delete(target.key);
   const before = await containerComputerStatus(runner, platform, target);
+  const active = inFlightContainerFrames.get(target.key);
+  if (active?.size) await Promise.allSettled(active);
   pendingContainerFrames.delete(target.key);
   const runtime = before.runtime;
   if (!runtime) throw Object.assign(new Error(before.problem ?? "No container runtime is installed"), { status: 409 });
@@ -1060,7 +1063,7 @@ export async function containerComputerFrame(
     }
     if (cacheable) screenshotStatusCache.set(target.key, { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS });
     try {
-      const screenshot = "/tmp/openmausbot-preview.png";
+      const screenshot = "/tmp/openbot-preview.png";
       await runner(
         status.runtime,
         cuaExecArgs([
@@ -1076,7 +1079,7 @@ export async function containerComputerFrame(
       );
       const { stdout } = await runner(
         status.runtime,
-        ["exec", target.containerName, "sh", "-c", SCREENSHOT_TRANSFER, "openmausbot-preview", screenshot],
+        ["exec", target.containerName, "sh", "-c", SCREENSHOT_TRANSFER, "openbot-preview", screenshot],
         30_000,
       );
       const raw = stdout.trim();
@@ -1093,12 +1096,22 @@ export async function containerComputerFrame(
     }
   };
 
+  let active = inFlightContainerFrames.get(target.key);
+  if (!active) {
+    active = new Set();
+    inFlightContainerFrames.set(target.key, active);
+  }
   const promise = capture().finally(() => {
-    if (pendingContainerFrames.get(target.key) === promise) {
+    active.delete(promise);
+    if (active.size === 0 && inFlightContainerFrames.get(target.key) === active) {
+      inFlightContainerFrames.delete(target.key);
+    }
+    if (cacheable && pendingContainerFrames.get(target.key) === promise) {
       pendingContainerFrames.delete(target.key);
     }
   });
-  pendingContainerFrames.set(target.key, promise);
+  active.add(promise);
+  if (cacheable) pendingContainerFrames.set(target.key, promise);
   return promise;
 }
 

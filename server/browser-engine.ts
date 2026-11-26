@@ -378,7 +378,7 @@ interface BrowserLookupOptions {
 
 function packagedBrowser(options: BrowserLookupOptions) {
   const env = options.env ?? process.env;
-  const resources = env.OPENBOT_RESOURCES_PATH ?? env.OMB_RESOURCES_PATH;
+  const resources = env.OPENBOT_RESOURCES_PATH?.trim() || env.OMB_RESOURCES_PATH?.trim();
   if (!resources) return null;
   try {
     return browserBundlePaths(join(resolve(resources), "browser-engine"), `${options.platform ?? process.platform}-${options.arch ?? process.arch}`);
@@ -395,7 +395,7 @@ export function resolveAgentBrowserBinary(options: BrowserLookupOptions = {}): s
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const exists = options.exists ?? existsSync;
-  const override = (env.OPENBOT_AGENT_BROWSER_PATH ?? env.OMB_AGENT_BROWSER_PATH)?.trim();
+  const override = env.OPENBOT_AGENT_BROWSER_PATH?.trim() || env.OMB_AGENT_BROWSER_PATH?.trim();
   if (override) return resolve(override) && exists(resolve(override)) ? resolve(override) : null;
   const bundle = packagedBrowser(options);
   if (bundle && exists(bundle.directory)) return completePackage(bundle, exists) ? bundle.engine : null;
@@ -430,7 +430,8 @@ export async function installAgentBrowserBinary(options: {
   try {
     const response = await (options.fetchImpl ?? fetch)(url, { redirect: "follow", signal: controller.signal });
     if (!response.ok) throw new Error(`the agent-browser download failed (HTTP ${response.status})`);
-    const declared = Number(response.headers.get("content-length") ?? NaN);
+    const rawLength = response.headers.get("content-length")?.trim();
+    const declared = rawLength ? Number(rawLength) : NaN;
     if (Number.isFinite(declared) && declared !== asset.bytes) throw new Error("the agent-browser download did not match its pinned size; nothing was installed");
     // Stream, never buffer: a body past the pinned size is cut off mid-flight.
     const chunks: Uint8Array[] = [];
@@ -548,7 +549,7 @@ export function browserEngineStatus(options: BrowserLookupOptions = {}): Browser
   }
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
-  const asset = resolveAgentBrowserReleaseAsset(platform, arch, isMusl(platform));
+  const asset = resolveAgentBrowserReleaseAsset(platform, arch, isMusl(platform, options.exists));
   return asset
     ? { kind: "unavailable", reason: "agent-browser is not installed on this machine yet", installable: true }
     : { kind: "unavailable", reason: `agent-browser publishes no build for ${platform}-${arch}`, installable: false };
@@ -720,7 +721,7 @@ export async function clearBrowserSessionState(
     let pendingFiles: string[] = [];
     try { pendingFiles = readdirSync(pendingDirectory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    const candidates = bases.map((base) => new RegExp(`^${base}-candidate-[0-9]+\\.json(?:\\.enc)?$`));
+    const candidates = bases.map((base) => new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}-candidate-[0-9]+\\.json(?:\\.enc)?$`));
     for (const name of pendingFiles) if (candidates.some((candidate) => candidate.test(name))) remove(join(pendingDirectory, name));
     rmSync(browserProfileDirectory(session, options.dataDir), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     preparedBrowserSessions.delete(join(directory, session));

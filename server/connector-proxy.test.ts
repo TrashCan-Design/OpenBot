@@ -283,7 +283,7 @@ describe("connector MCP bridge", () => {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "openmausbot-connectors", version: "1" },
+        serverInfo: { name: "openbot-connectors", version: "1" },
       },
     });
     expect(reply.result).not.toHaveProperty("isError");
@@ -347,7 +347,7 @@ describe("connector MCP bridge", () => {
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2024-11-05" } })}\n`);
     const reply = await nextJson(lines);
     expect(reply.result.protocolVersion).toBe("2024-11-05");
-    expect(reply.result.serverInfo).toEqual({ name: "openmausbot-connectors", version: "1" });
+    expect(reply.result.serverInfo).toEqual({ name: "openbot-connectors", version: "1" });
     expect(upstreamAuthorization).toBe("Bearer upstream-secret");
     expect(upstreamBody).toMatchObject({ method: "initialize" });
     expect(JSON.stringify(reply)).not.toContain("upstream-secret");
@@ -663,5 +663,50 @@ describe("connected-app tools by name", () => {
     const result = await nextJson(lines);
     expect(result.id).toBe(1);
     expect(result.result.tools).toEqual([]);
+  });
+
+  it("ignores non-object JSON lines, non-object params, blank toolkit slugs, and non-object SSE frames", async () => {
+    const requestedItems: unknown[] = [];
+    const upstream = await listen((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        if (request.url === "/api/internal/connectors/request") {
+          requestedItems.push(JSON.parse(body).items);
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({}));
+          return;
+        }
+        const rpc = JSON.parse(body);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end([
+          "data: null",
+          "data: [1, 2, 3]",
+          `data: ${JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [] } })}`,
+          "",
+        ].join("\n\n"));
+      });
+    });
+    const lines = start({
+      OMB_CONNECTOR_UPSTREAM_URL: `${upstream}/mcp`,
+      OMB_HARNESS_URL: upstream,
+      OMB_CONNECTOR_TOKEN: "test-token",
+    });
+
+    child!.stdin.write("null\n[1,2]\n\"hello\"\n");
+    child!.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: ["bad"] }) + "\n");
+    const nonObjectParamsReply = await nextJson(lines);
+    expect(nonObjectParamsReply.id).toBe(1);
+    expect(nonObjectParamsReply.result.tools).toEqual([]);
+
+    child!.stdin.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["   ", { toolkit: "  " }, "gmail"] } },
+    }) + "\n");
+    const manageReply = await nextJson(lines);
+    expect(manageReply.id).toBe(2);
+    expect(requestedItems).toEqual([[{ slug: "gmail" }]]);
   });
 });

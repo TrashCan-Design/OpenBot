@@ -93,10 +93,10 @@ case "$*" in
   "ps -aq --filter name=openbot-connector") printf '%s' "\${FAKE_CONNECTOR:-}" ;;
   "run --rm --network none --entrypoint id "*" -u") /usr/bin/id -u ;;
   "run --rm --network none --entrypoint id "*" -g") /usr/bin/id -g ;;
-  compose*" ps -q omb") echo c1 ;;
+  compose*" ps -q openbot" | compose*" ps -q omb") echo c1 ;;
   "image inspect -f {{json .Config.Env}} "*) echo "$FAKE_IMAGE_ENV" ;;
   "image inspect -f {{index .Config.Labels "*) echo "\${FAKE_IMAGE_VERSION-v0.1.151}" ;;
-  "compose exec -T omb node dist-server/bot-box/box-check.js --public=none") echo "$FAKE_BOX_CHECK"; case "$FAKE_BOX_CHECK" in *'"failed":[]'*) ;; *) exit 1 ;; esac ;;
+  "compose exec -T openbot node dist-server/bot-box/box-check.js --public=none" | "compose exec -T omb node dist-server/bot-box/box-check.js --public=none") echo "$FAKE_BOX_CHECK"; case "$FAKE_BOX_CHECK" in *'"failed":[]'*) ;; *) exit 1 ;; esac ;;
   "inspect --format {{.State.Health.Status}} c1") echo "$FAKE_HEALTH" ;;
 esac`,
 };
@@ -216,6 +216,36 @@ describe.skipIf(!posix)("deploy/install.sh", () => {
     });
     expect(unset.status).toBe(0);
     expect(unset.stdout).toBe("");
+  });
+
+  it("uses lowercase GHCR repo, writes OPENBOT_IMAGE, and accepts openmausbot /api/health responses", () => {
+    const res = run(["--domain", "bot.example.com", "--email", "admin@example.com"], {
+      env: { FAKE_HTTPS: '{"app":"openmausbot"}', FAKE_IMAGE_ENV: '["PATH=/usr/bin","HOME=/data","OPENBOT_IMAGE=server"]' },
+    });
+    expect(res.status, res.all).toBe(0);
+    expect(res.calls.join("\n")).toContain("ghcr.io/trashcan-design/openbot");
+    expect(res.calls.join("\n")).not.toContain("ghcr.io/TrashCan-Design/openbot");
+    expect(res.stdout).not.toContain("ghcr.io/TrashCan-Design/openbot");
+    const envFile = readFileSync(join(res.install, ".env"), "utf8");
+    expect(envFile).toContain("OPENBOT_IMAGE=ghcr.io/trashcan-design/openbot:v0.1.151");
+    expect(envFile).not.toContain("OMB_IMAGE=");
+    expect(envFile).toContain("OPENBOT_SIGNIN_EMAILS=admin@example.com");
+    expect(envFile).not.toContain("OMB_SIGNIN_EMAILS=");
+    const composeYaml = readFileSync(join(res.install, "compose.yaml"), "utf8");
+    expect(composeYaml).toContain("  openbot:\n");
+    expect(composeYaml).toContain("grep -qE 'openbot|openmausbot'");
+  });
+
+  it("keeps compose.yaml and Caddyfile templates identical between deploy/install.sh and deploy/update.sh", () => {
+    const updateScript = readFileSync(join(ROOT, "deploy", "update.sh"), "utf8");
+    const installCompose = script.match(/write_compose\(\) \{\n  write_file "\$INSTALL_DIR\/compose\.yaml" <<'COMPOSE'\n([\s\S]*?)\nCOMPOSE\n\}/)?.[1];
+    const updateCompose = updateScript.match(/installer_compose\(\) \{\n  cat <<'COMPOSE'\n([\s\S]*?)\nCOMPOSE\n\}/)?.[1];
+    const installCaddy = script.match(/write_caddyfile\(\) \{\n  write_file "\$INSTALL_DIR\/Caddyfile" <<'CADDY'\n([\s\S]*?)\nCADDY\n\}/)?.[1];
+    const updateCaddy = updateScript.match(/installer_caddyfile\(\) \{\n  cat <<'CADDY'\n([\s\S]*?)\nCADDY\n\}/)?.[1];
+    expect(installCompose).toBeTruthy();
+    expect(installCompose).toBe(updateCompose);
+    expect(installCaddy).toBeTruthy();
+    expect(installCaddy).toBe(updateCaddy);
   });
 });
 
@@ -371,6 +401,40 @@ fi
     expect(res.stdout).not.toContain("fd9-leaked");
   });
 
+  it("keeps FD 9 locked after finish() so recovery does not drop the lock before the main update", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-finish-lock-"));
+    dirs.push(dir);
+    const updateDir = join(dir, ".update");
+    mkdirSync(updateDir, { recursive: true });
+    writeFileSync(join(updateDir, "journal"), "phase=wait\n");
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        eval "$(sed -n '/^take_lock() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^finish() {/,/^}/p' "$0")"
+        DIR="$1"
+        STATE="$DIR/.update"
+        LOCK="$STATE/lock"
+        JOURNAL="$STATE/journal"
+        LAST="$STATE/last"
+        J_backup="backup-vol"
+        say() { :; }
+        old_name() { printf '1.0.0'; }
+        new_name() { printf '1.0.1'; }
+        old_repository_layout() { return 1; }
+        take_lock
+        finish
+        (
+          take_lock
+        )
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status).toBe(3);
+    expect(res.stdout).toMatch(/already running|took the lock/);
+  });
+
   it("reclaims regular lock file with stale PID and overwrites with current PID", () => {
     const dir = mkdtempSync(join(tmpdir(), "openbot-update-stale-file-"));
     dirs.push(dir);
@@ -441,6 +505,128 @@ fi
     ], { encoding: "utf8" });
     expect(res.status).toBe(3);
     expect(res.stdout).toContain(`An update is already running here (process ${process.pid}). Wait for it to finish.`);
+  });
+
+  it("uses lowercase GHCR repo and accepts openmausbot /api/health and legacy environment descriptor", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "openbot-update-curl-"));
+    dirs.push(binDir);
+    writeFileSync(
+      join(binDir, "curl"),
+      `#!/bin/sh
+case "$*" in
+  *"/api/health"*) printf '{"app":"openmausbot"}' ;;
+  *"/.well-known/openbot/environment"*) exit 22 ;;
+  *"/.well-known/openmausbot/environment"*) printf '{"version":"0.1.144"}' ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        PATH="$1:$PATH"
+        eval "$(sed -n '/^REPO=/,/^PINNED=/p' "$0")"
+        eval "$(sed -n '/^json_top() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^answers() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^reported_version() {/,/^}/p' "$0")"
+        SERVICE=openbot
+        compose() {
+          if [ "$1" = "exec" ] && [ "$2" = "-T" ]; then
+            shift 3
+            "$@"
+          fi
+        }
+        printf 'repo=%s\n' "$REPO"
+        printf '%s' "$REPO@sha256:$(printf 'a%.0s' {1..64})" | grep -Eq "$PINNED" && echo "pinned_ok"
+        answers && echo "answers_ok"
+        printf 'version=%s\n' "$(reported_version)"
+      `,
+      UPDATE_SCRIPT,
+      binDir,
+    ], { encoding: "utf8" });
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toContain("repo=ghcr.io/trashcan-design/openbot");
+    expect(res.stdout).toContain("pinned_ok");
+    expect(res.stdout).toContain("answers_ok");
+    expect(res.stdout).toContain("version=0.1.144");
+  });
+
+  it("pin_image handles single-line .env files and legacy OMB_IMAGE-only compose files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-pin-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, ".env"), "OPENBOT_IMAGE=ghcr.io/trashcan-design/openbot:latest\n", { mode: 0o600 });
+    writeFileSync(join(dir, "compose.yaml"), "services:\n  openbot:\n    image: ${OPENBOT_IMAGE:-${OMB_IMAGE}}\n");
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        cd "$1"
+        DIR="$1"
+        eval "$(sed -n '/^pin_image() {/,/^}/p' "$0")"
+        pin_image "ghcr.io/trashcan-design/openbot@sha256:$(printf 'b%.0s' {1..64})"
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status, res.stderr).toBe(0);
+    const updatedEnv = readFileSync(join(dir, ".env"), "utf8");
+    expect(updatedEnv.trim()).toBe(`OPENBOT_IMAGE=ghcr.io/trashcan-design/openbot@sha256:${"b".repeat(64)}`);
+
+    const legacyDir = mkdtempSync(join(tmpdir(), "openbot-update-pin-legacy-"));
+    dirs.push(legacyDir);
+    writeFileSync(join(legacyDir, "compose.yaml"), "services:\n  omb:\n    image: ${OMB_IMAGE:?missing}\n");
+    const legacyRes = spawnSync("bash", [
+      "-c",
+      `
+        cd "$1"
+        DIR="$1"
+        eval "$(sed -n '/^pin_image() {/,/^}/p' "$0")"
+        pin_image "ghcr.io/trashcan-design/openbot:v0.1.144"
+      `,
+      UPDATE_SCRIPT,
+      legacyDir,
+    ], { encoding: "utf8" });
+    expect(legacyRes.status, legacyRes.stderr).toBe(0);
+    expect(readFileSync(join(legacyDir, ".env"), "utf8").trim()).toBe("OMB_IMAGE=ghcr.io/trashcan-design/openbot:v0.1.144");
+  });
+
+  it("re-detects SERVICE from omb to openbot after move_installer_layout", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openbot-update-migrate-"));
+    dirs.push(dir);
+    mkdirSync(join(dir, ".update"), { recursive: true });
+    writeFileSync(
+      join(dir, "compose.yaml"),
+      "# Written by OpenBot's installer (deploy/install.sh)\nservices:\n  omb:\n    image: ${OMB_IMAGE}\n  caddy:\n    network_mode: \"service:omb\"\n",
+    );
+    writeFileSync(join(dir, "Caddyfile"), "{$DOMAIN} {\n  reverse_proxy 127.0.0.1:8799\n}\n");
+    const res = spawnSync("bash", [
+      "-c",
+      `
+        cd "$1"
+        DIR="$1"
+        STATE="$DIR/.update"
+        SERVICE_ASKED=""
+        eval "$(sed -n '/^detect_service() {/,/^}/p' "$0")"
+        eval "$(sed -n '/^INSTALLER_MARK=/,/^installer_caddyfile() {/p' "$0" | sed '$d')"
+        eval "$(sed -n '/^installer_caddyfile() {/,/^}/p' "$0")"
+        detect_service
+        printf 'before=%s\n' "$SERVICE"
+        old_installer_layout && move_installer_layout
+        [ -n "$SERVICE_ASKED" ] || detect_service
+        printf 'after=%s\n' "$SERVICE"
+      `,
+      UPDATE_SCRIPT,
+      dir,
+    ], { encoding: "utf8" });
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toContain("before=omb");
+    expect(res.stdout).toContain("after=openbot");
+    expect(readFileSync(join(dir, "compose.yaml"), "utf8")).toContain("  openbot:\n");
+    expect(existsSync(join(dir, ".update", "compose.yaml.before"))).toBe(true);
+  });
+
+  it("deploy/docker-compose.yml accepts OPENBOT_IMAGE and OMB_IMAGE overrides", () => {
+    const composeFile = readFileSync(join(ROOT, "deploy", "docker-compose.yml"), "utf8");
+    expect(composeFile).toContain("image: ${OPENBOT_IMAGE:-${OMB_IMAGE:-ghcr.io/trashcan-design/openbot:latest}}");
   });
 });
 

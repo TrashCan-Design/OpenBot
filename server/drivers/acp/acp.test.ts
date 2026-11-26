@@ -2502,6 +2502,43 @@ describe("ACP turns (fake CLI)", () => {
     expect(Number(readFileSync(countFile, "utf8"))).toBe(1);
   });
 
+  it("settles the turn and clears active state if respawning fails during session reestablish", async () => {
+    process.env.FAKE_ACP_LOAD_ERROR = JSON.stringify({ code: -32603, message: "load failed" });
+    await create(SelectModelDriver);
+    const first = await instance.adapter.sendTurn({ threadId: "t-reestablish-fail", text: "first" });
+    const started = await recorder.until((e) => e.type === "session.started" && e.turnId === first.turnId);
+    expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId)).toMatchObject({ ok: true });
+
+    const realSpawn = procs.spawnCli;
+    let throwNext = true;
+    const spy = vi.spyOn(procs, "spawnCli").mockImplementation((...args) => {
+      if (throwNext) {
+        throwNext = false;
+        throw new Error("reestablish spawn failed");
+      }
+      return realSpawn(...args);
+    });
+
+    try {
+      const second = await instance.adapter.sendTurn({
+        threadId: "t-reestablish-fail",
+        text: "second",
+        resumeCursor: started.type === "session.started" ? started.sessionId : undefined,
+        integrations: { custom: [{ id: "extra", name: "extra", transport: "stdio", command: "true", args: [] }] },
+      });
+      const completed = await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
+      expect(completed).toMatchObject({ ok: false, stopReason: "rpc_error" });
+      expect(recorder.events.some((e) => e.type === "runtime.error" && e.turnId === second.turnId && e.message.includes("reestablish spawn failed"))).toBe(true);
+      expect(instance.adapter.hasSession("t-reestablish-fail")).toBe(false);
+
+      delete process.env.FAKE_ACP_LOAD_ERROR;
+      const third = await instance.adapter.sendTurn({ threadId: "t-reestablish-fail", text: "third" });
+      expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === third.turnId)).toMatchObject({ ok: true });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("applyTurnEnv sees the picker model after resolveTurnModel", async () => {
     const dump = join(scratch, "turn-env.json");
     process.env.FAKE_ACP_DUMP = dump;

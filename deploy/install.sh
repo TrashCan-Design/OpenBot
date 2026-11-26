@@ -15,12 +15,12 @@ set -eu
 settings() {
   SYSROOT="${OPENBOT_INSTALL_SYSROOT:-${OMB_INSTALL_SYSROOT:-}}"
   INSTALL_DIR="${OPENBOT_INSTALL_DIR:-${OMB_INSTALL_DIR:-/opt/openbot}}"
-  IMAGE_REPO=TrashCan-Design/openbot
+  IMAGE_REPO=trashcan-design/openbot
   RELEASES_URL=https://api.github.com/repos/TrashCan-Design/OpenBot/releases/latest
   ADMIN_URL="${OPENBOT_ADMIN_URL:-${MAUSBOT_ADMIN_URL:-https://cloud.openbot.design}}"
   SCRIPT_URL=https://raw.githubusercontent.com/TrashCan-Design/OpenBot/main/deploy/install.sh
   # Where the files this installer places come from: this repository at the tag of the version it installs, and at
-  # main when that tag does not have them. OMB_INSTALL_SOURCE names one copy to use instead (https://… or file:///…).
+  # main when that tag does not have them. OPENBOT_INSTALL_SOURCE names one copy to use instead (https://… or file:///…).
   REPOSITORY_FILES=https://raw.githubusercontent.com/TrashCan-Design/OpenBot
   SOURCE_ASKED="${OPENBOT_INSTALL_SOURCE:-${OMB_INSTALL_SOURCE:-}}"
   SOURCE=""
@@ -37,14 +37,14 @@ settings() {
   MIN_MEMORY_MB=3500
   MIN_DISK_GB=20
   MAX_CLOCK_SKEW_S=300
-  HEALTH_WAIT_S="${OMB_INSTALL_HEALTH_WAIT_S:-240}"
-  HTTPS_WAIT_S="${OMB_INSTALL_HTTPS_WAIT_S:-180}"
+  HEALTH_WAIT_S="${OPENBOT_INSTALL_HEALTH_WAIT_S:-${OMB_INSTALL_HEALTH_WAIT_S:-240}}"
+  HTTPS_WAIT_S="${OPENBOT_INSTALL_HTTPS_WAIT_S:-${OMB_INSTALL_HTTPS_WAIT_S:-180}}"
 
   MODE=install
   DOMAIN=""
   EMAIL=""
   CODE=""
-  INSTALL_DOCKER="${OMB_INSTALL_DOCKER:-}"
+  INSTALL_DOCKER="${OPENBOT_INSTALL_DOCKER:-${OMB_INSTALL_DOCKER:-}}"
   SANDBOX=yes
   FAILED=0
   DOCKER_STATE=unknown
@@ -196,10 +196,10 @@ check_os() {
   case "$os_id $os_version" in
     "ubuntu 22.04" | "ubuntu 24.04") ok "operating system: $os_name" ;;
     *)
-      if [ "${OMB_INSTALL_ALLOW_UNTESTED_OS:-}" = 1 ]; then
+      if [ "${OPENBOT_INSTALL_ALLOW_UNTESTED_OS:-${OMB_INSTALL_ALLOW_UNTESTED_OS:-}}" = 1 ]; then
         note "This server runs $os_name, which the installer is not tested on; going on as asked."
       else
-        fix "This server runs $os_name. OpenBot's installer runs on Ubuntu 22.04 or 24.04: pick one of those, or run again with OMB_INSTALL_ALLOW_UNTESTED_OS=1 to try anyway."
+        fix "This server runs $os_name. OpenBot's installer runs on Ubuntu 22.04 or 24.04: pick one of those, or run again with OPENBOT_INSTALL_ALLOW_UNTESTED_OS=1 to try anyway."
       fi
       ;;
   esac
@@ -354,7 +354,7 @@ check_dns() {
     note "No --domain was given, so its DNS record was not checked."
     return
   fi
-  if [ "${OMB_INSTALL_SKIP_DNS:-}" = 1 ]; then
+  if [ "${OPENBOT_INSTALL_SKIP_DNS:-${OMB_INSTALL_SKIP_DNS:-}}" = 1 ]; then
     note "The DNS record of $DOMAIN was not checked, as asked."
     return
   fi
@@ -374,7 +374,7 @@ check_dns() {
       fi
     done
   done
-  fix "$DOMAIN points at $resolved, not at this server ($target). Change its A record to $target (on Cloudflare, set the record to DNS only), then run this again; or set OMB_INSTALL_SKIP_DNS=1 if a load balancer forwards ports 80 and 443 here."
+  fix "$DOMAIN points at $resolved, not at this server ($target). Change its A record to $target (on Cloudflare, set the record to DNS only), then run this again; or set OPENBOT_INSTALL_SKIP_DNS=1 if a load balancer forwards ports 80 and 443 here."
 }
 
 check_outbound() {
@@ -396,7 +396,7 @@ check_outbound() {
   fi
   ok "outbound: the image registries and Let's Encrypt are reachable"
   if ! reachable https://accounts.openbot.design/; then
-    note "accounts.openbot.design is not reachable, so signing in with an emailed code needs a mail server of your own (OMB_SIGNIN_SMTP_URL). Pairing codes work without it."
+    note "accounts.openbot.design is not reachable, so signing in with an emailed code needs a mail server of your own (OPENBOT_SIGNIN_SMTP_URL). Pairing codes work without it."
   fi
 }
 
@@ -477,7 +477,7 @@ registry_get() { # path-under-the-repository media-types: the registry's answer,
   printf 'header = "Authorization: Bearer %s"\n' "$REGISTRY_TOKEN" | curl -K - -fsSL --max-time 20 -H "Accept: $2" "https://ghcr.io/v2/$IMAGE_REPO/$1" 2>/dev/null
 }
 
-# Whether the image a tag or digest names runs the bots' sandbox (OMB_IMAGE=server in its settings), read from the
+# Whether the image a tag or digest names runs the bots' sandbox (OPENBOT_IMAGE=server or OMB_IMAGE=server in its settings), read from the
 # registry without downloading it: yes, no, or nothing when the registry did not say.
 registry_sandbox() { # tag or sha256:digest
   [ -n "$REGISTRY_TOKEN" ] || REGISTRY_TOKEN=$(registry_token || true)
@@ -497,7 +497,7 @@ registry_sandbox() { # tag or sha256:digest
   [ -n "$config" ] || return 0
   case "$(registry_get "blobs/$config" "application/vnd.oci.image.config.v1+json, application/vnd.docker.container.image.v1+json")" in
     '') ;;
-    *'"OMB_IMAGE=server"'*) echo yes ;;
+    *'"OPENBOT_IMAGE=server"'* | *'"OMB_IMAGE=server"'*) echo yes ;;
     *) echo no ;;
   esac
 }
@@ -516,25 +516,26 @@ newest_release() {
 
 # The stable channel when it is published, else the newest release. Never `latest`, which follows every commit.
 check_version() {
-  chosen="${OMB_INSTALL_IMAGE:-}"
+  chosen="${OPENBOT_INSTALL_IMAGE:-${OMB_INSTALL_IMAGE:-}}"
   if [ -n "$chosen" ]; then
     case "$chosen" in
       *[!A-Za-z0-9/:._@-]*)
-        fix "OMB_INSTALL_IMAGE is not an image name."
+        fix "OPENBOT_INSTALL_IMAGE is not an image name."
         return
         ;;
     esac
     case "${chosen##*/}" in
-      *:latest) fix "OMB_INSTALL_IMAGE names the latest tag, which follows every commit. Name a release, like ghcr.io/$IMAGE_REPO:v0.1.151." ;;
+      *:latest) fix "OPENBOT_INSTALL_IMAGE names the latest tag, which follows every commit. Name a release, like ghcr.io/$IMAGE_REPO:v0.1.151." ;;
       *:?*)
         IMAGE=$chosen
         ok "version: $IMAGE, as asked"
         ;;
-      *) fix "OMB_INSTALL_IMAGE needs a release tag, like ghcr.io/$IMAGE_REPO:v0.1.151." ;;
+      *) fix "OPENBOT_INSTALL_IMAGE needs a release tag, like ghcr.io/$IMAGE_REPO:v0.1.151." ;;
     esac
     return
   fi
-  pinned=$(env_value OMB_IMAGE)
+  pinned=$(env_value OPENBOT_IMAGE)
+  [ -n "$pinned" ] || pinned=$(env_value OMB_IMAGE)
   case "$pinned" in
     *@sha256:*)
       IMAGE=$pinned
@@ -639,8 +640,8 @@ write_compose() {
 # back in a new one, and left Caddy refusing HTTPS in the old one.
 name: openbot
 services:
-  omb:
-    image: ${OMB_IMAGE:?run the installer again}
+  openbot:
+    image: ${OPENBOT_IMAGE:-${OMB_IMAGE:?run the installer again}}
     restart: unless-stopped
     init: true
     shm_size: 512m
@@ -648,22 +649,34 @@ services:
       - ./data:/data
       - edge:/run/openbot
     environment:
+      OPENBOT_PORT: "8799"
+      OPENBOT_WEBHOOK_PORT: "8800"
+      OPENBOT_TUNNEL_SOCKET: /run/openbot/http.sock
+      OPENBOT_WEBHOOK_SOCKET: /run/openbot/hooks.sock
+      OPENBOT_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_SERVER_NAME: ${OPENBOT_SERVER_NAME:-${OMB_SERVER_NAME:-${DOMAIN}}}
+      # Passed only when .env sets them: an empty one would still be set, and Settings' own lists are used when not.
+      OPENBOT_SIGNIN_EMAILS:
+      OPENBOT_SIGNIN_MEMBER_EMAILS:
+      OPENBOT_SIGNIN_SMTP_URL:
+      OPENBOT_SIGNIN_SMTP_FROM:
+      # "1": phones pair by QR through OpenBot Relay. Sign in once: docker compose exec openbot openbot login --relay
+      OPENBOT_PHONE_RELAY:
       OMB_PORT: "8799"
       OMB_WEBHOOK_PORT: "8800"
       OMB_TUNNEL_SOCKET: /run/openbot/http.sock
       OMB_WEBHOOK_SOCKET: /run/openbot/hooks.sock
       OMB_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
       OMB_PUBLIC_URL: https://${DOMAIN}
-      OMB_SERVER_NAME: ${OMB_SERVER_NAME:-${DOMAIN}}
-      # Passed only when .env sets them: an empty one would still be set, and Settings' own lists are used when not.
+      OMB_SERVER_NAME: ${OPENBOT_SERVER_NAME:-${OMB_SERVER_NAME:-${DOMAIN}}}
       OMB_SIGNIN_EMAILS:
       OMB_SIGNIN_MEMBER_EMAILS:
       OMB_SIGNIN_SMTP_URL:
       OMB_SIGNIN_SMTP_FROM:
-      # "1": phones pair by QR through OpenBot Relay. Sign in once: docker compose exec omb openbot login --relay
       OMB_PHONE_RELAY:
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8799/api/health | grep -q openbot"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8799/api/health | grep -qE 'openbot|openmausbot'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -677,7 +690,7 @@ services:
     # Started with the server, not after it is healthy: Caddy reaches it over the socket
     # whenever it answers, so `up` never waits on the server's health.
     depends_on:
-      omb:
+      openbot:
         condition: service_started
     environment:
       DOMAIN: ${DOMAIN}
@@ -747,17 +760,21 @@ unset_env() { # name
 write_settings() {
   if [ ! -f "$INSTALL_DIR/.env" ]; then
     write_file "$INSTALL_DIR/.env" 600 <<'ENV'
-# OpenBot's settings on this server. The installer sets DOMAIN, OMB_IMAGE and COMPOSE_FILE and keeps every other line.
-# Who may sign in with an emailed code: OMB_SIGNIN_EMAILS (admins) and OMB_SIGNIN_MEMBER_EMAILS, comma-separated.
+# OpenBot's settings on this server. The installer sets DOMAIN, OPENBOT_IMAGE and COMPOSE_FILE and keeps every other line.
+# Who may sign in with an emailed code: OPENBOT_SIGNIN_EMAILS (admins) and OPENBOT_SIGNIN_MEMBER_EMAILS, comma-separated.
 ENV
   fi
   set_env DOMAIN "$DOMAIN"
-  set_env OMB_IMAGE "$IMAGE"
+  set_env OPENBOT_IMAGE "$IMAGE"
+  unset_env OMB_IMAGE
   if [ -n "$EMAIL" ]; then
-    current=$(env_value OMB_SIGNIN_EMAILS)
+    current=$(env_value OPENBOT_SIGNIN_EMAILS)
+    [ -n "$current" ] || current=$(env_value OMB_SIGNIN_EMAILS)
     case ",$(printf '%s' "$current" | tr -d ' ')," in
       *",$EMAIL,"*) ;;
-      *) set_env OMB_SIGNIN_EMAILS "${current:+$current,}$EMAIL" ;;
+      *)
+        set_env OPENBOT_SIGNIN_EMAILS "${current:+$current,}$EMAIL"
+        ;;
     esac
   fi
 }
@@ -818,10 +835,10 @@ fetch_sandbox() {
     fetch "connector/profiles/$APPARMOR_PROFILE.apparmor" "$INSTALL_DIR/box/profiles/$APPARMOR_PROFILE.apparmor"
 }
 
-# An image that runs the hardened profile says so in its settings (OMB_IMAGE=server).
+# An image that runs the hardened profile says so in its settings (OPENBOT_IMAGE=server or OMB_IMAGE=server).
 image_has_sandbox() {
   case "$(docker image inspect -f '{{json .Config.Env}}' "$IMAGE" 2>/dev/null || true)" in
-    *'"OMB_IMAGE=server"'*) return 0 ;;
+    *'"OPENBOT_IMAGE=server"'* | *'"OMB_IMAGE=server"'*) return 0 ;;
   esac
   return 1
 }
@@ -843,7 +860,7 @@ prepare_sandbox() {
   fi
   say "Preparing this server for the bots' sandbox..."
   note "The sandbox's files are $SOURCE_NAME."
-  MAUSBOT_PROFILES_DIR="$INSTALL_DIR/box/profiles" sh "$INSTALL_DIR/box/prepare-host.sh" >/dev/null ||
+  OPENBOT_PROFILES_DIR="$INSTALL_DIR/box/profiles" MAUSBOT_PROFILES_DIR="$INSTALL_DIR/box/profiles" sh "$INSTALL_DIR/box/prepare-host.sh" >/dev/null ||
     fail "This server could not be prepared for the bots' sandbox (the reason is above). Fix that and run this again; or add --no-sandbox to install without the sandbox, on a server you alone sign in to."
   set_env COMPOSE_FILE compose.yaml:compose.box.yaml
   SANDBOX=on
@@ -858,8 +875,8 @@ sandbox_field() { # result name: that field of one result of the self-check
 check_sandbox_runs() {
   [ "$SANDBOX" = on ] || return 0
   say "Checking that the bots' sandbox holds..."
-  see="See it with: cd $INSTALL_DIR && sudo docker compose exec omb node dist-server/bot-box/box-check.js --public=none  and send us what it prints."
-  report=$(compose exec -T omb node dist-server/bot-box/box-check.js --public=none 2>/dev/null | tr -d '\n' || true)
+  see="See it with: cd $INSTALL_DIR && sudo docker compose exec openbot node dist-server/bot-box/box-check.js --public=none  and send us what it prints."
+  report=$(compose exec -T openbot node dist-server/bot-box/box-check.js --public=none 2>/dev/null | tr -d '\n' || true)
   case "$report" in
     *'"box":"bwrap"'*'"results":[{'*) ;;
     *) fail "OpenBot is running, but its bots' sandbox gave no answer to its self-check, so bots may not be separated from the server. $see" ;;
@@ -916,7 +933,7 @@ prepare_data() {
 wait_healthy() {
   waited=0
   while [ "$waited" -lt "$HEALTH_WAIT_S" ]; do
-    container=$(compose ps -q omb 2>/dev/null | head -n 1 || true)
+    container=$(compose ps -q openbot 2>/dev/null | head -n 1 || true)
     if [ -n "$container" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || true)" = healthy ]; then return 0; fi
     sleep 5
     waited=$((waited + 5))
@@ -925,7 +942,7 @@ wait_healthy() {
 }
 
 https_answers() {
-  curl -fsS --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/health" 2>/dev/null | grep -q openbot
+  curl -fsS --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/health" 2>/dev/null | grep -qE 'openbot|openmausbot'
 }
 
 wait_https() {
@@ -963,7 +980,7 @@ install_server() {
   prepare_data
   say "Starting OpenBot..."
   compose_quietly up -d --remove-orphans || fail "OpenBot could not be started (Docker's message is above). Fix that, then run this again."
-  wait_healthy || fail "OpenBot started but did not report healthy within $HEALTH_WAIT_S seconds. Its log: cd $INSTALL_DIR && sudo docker compose logs omb --tail 50"
+  wait_healthy || fail "OpenBot started but did not report healthy within $HEALTH_WAIT_S seconds. Its log: cd $INSTALL_DIR && sudo docker compose logs openbot --tail 50"
   check_sandbox_runs
   say "Waiting for the HTTPS certificate of $DOMAIN..."
   wait_https || fail "OpenBot is running, but https://$DOMAIN did not answer within $HTTPS_WAIT_S seconds, usually because the certificate could not be issued. Check that $DOMAIN points at this server and that ports 80 and 443 are open in your provider's firewall, then run this again. Caddy's reason: cd $INSTALL_DIR && sudo docker compose logs caddy --tail 30"
@@ -974,7 +991,7 @@ install_server() {
 connect_server() {
   say ""
   say "Connecting this server to OpenBot..."
-  connector_script="${MAUSBOT_CONNECTOR_INSTALLER:-}"
+  connector_script="${OPENBOT_CONNECTOR_INSTALLER:-${MAUSBOT_CONNECTOR_INSTALLER:-}}"
   fetched=""
   if [ -z "$connector_script" ]; then
     fetched=$(mktemp)
@@ -984,7 +1001,7 @@ connect_server() {
       fail "OpenBot is installed and running here, but the connector's installer could not be downloaded from $ADMIN_URL. Nothing needs reinstalling: run this again with your code once that address answers."
     fi
   fi
-  if ! grep -q 'mausbot-connector' "$connector_script" 2>/dev/null; then
+  if ! grep -qE 'openbot-connector|mausbot-connector' "$connector_script" 2>/dev/null; then
     [ -z "$fetched" ] || rm -f "$fetched"
     fail "OpenBot is installed and running here, but what $ADMIN_URL sent is not the connector's installer. Nothing needs reinstalling: copy the install command from OpenBot again."
   fi
@@ -993,9 +1010,9 @@ connect_server() {
   # nothing is connected.
   status=0
   if [ "$INSTALL_DOCKER" = 1 ]; then
-    MAUSBOT_ADMIN_URL="$ADMIN_URL" MAUSBOT_INSTALL_DIR="$INSTALL_DIR" sh "$connector_script" "$CODE" --customer-run --install-docker || status=$?
+    OPENBOT_ADMIN_URL="$ADMIN_URL" OPENBOT_INSTALL_DIR="$INSTALL_DIR" MAUSBOT_ADMIN_URL="$ADMIN_URL" MAUSBOT_INSTALL_DIR="$INSTALL_DIR" sh "$connector_script" "$CODE" --customer-run --install-docker || status=$?
   else
-    MAUSBOT_ADMIN_URL="$ADMIN_URL" MAUSBOT_INSTALL_DIR="$INSTALL_DIR" sh "$connector_script" "$CODE" --customer-run || status=$?
+    OPENBOT_ADMIN_URL="$ADMIN_URL" OPENBOT_INSTALL_DIR="$INSTALL_DIR" MAUSBOT_ADMIN_URL="$ADMIN_URL" MAUSBOT_INSTALL_DIR="$INSTALL_DIR" sh "$connector_script" "$CODE" --customer-run || status=$?
   fi
   [ -z "$fetched" ] || rm -f "$fetched"
   [ "$status" = 0 ] || fail "OpenBot is installed and running here, but connecting it did not finish (the reason is above). Nothing needs reinstalling: fix that and run this again with a new code."
@@ -1004,7 +1021,7 @@ connect_server() {
 # The first admin's one-time sign-in link, as `openbot pair` prints it: its code line (until when it works) and the
 # link. Nothing when the server would not make one.
 first_admin_link() {
-  made=$(compose exec -T omb openbot pair --label "First admin" 2>/dev/null) || return 1
+  made=$(compose exec -T openbot openbot pair --label "First admin" 2>/dev/null) || return 1
   lines=$(printf '%s\n' "$made" | grep -E '^(Pairing code|Link) ' || true)
   case "$lines" in *"Link "*"https://$DOMAIN/pair#code="*) printf '%s\n' "$lines" | sed 's/^/  /' ;; *) return 1 ;; esac
 }
@@ -1013,7 +1030,7 @@ finish() {
   say ""
   say "OpenBot is running at https://$DOMAIN"
   say ""
-  pair_command="cd $INSTALL_DIR && sudo docker compose exec omb openbot pair --label \"First admin\""
+  pair_command="cd $INSTALL_DIR && sudo docker compose exec openbot openbot pair --label \"First admin\""
   # Only to a terminal: in a log, the link would let whoever reads it sign in as the admin until it is used or expires.
   if [ -t 1 ] && link=$(first_admin_link); then
     say "To sign in as the first admin, open this one-time link in your browser. Anyone who has it can use it, once:"
@@ -1024,7 +1041,8 @@ finish() {
     say "  $pair_command"
     [ -t 1 ] || say "(The link is not made here because this output is not a terminal: a log must not hold a link that signs in as the admin.)"
   fi
-  admins=$(env_value OMB_SIGNIN_EMAILS)
+  admins=$(env_value OPENBOT_SIGNIN_EMAILS)
+  [ -n "$admins" ] || admins=$(env_value OMB_SIGNIN_EMAILS)
   if [ -n "$admins" ]; then
     say "Or open https://$DOMAIN/pair and sign in with an emailed code as: $admins"
   fi
@@ -1075,10 +1093,12 @@ run_uninstall() {
   say "Your data is kept in $INSTALL_DIR/data, your settings in $INSTALL_DIR/.env and the HTTPS certificates in $INSTALL_DIR/caddy."
   say "To start it again: $(command_line "--domain $(env_value DOMAIN)")"
   say "This command never deletes your data. To delete it yourself: sudo rm -rf $INSTALL_DIR"
-  if [ -f "$SYSROOT/etc/mausbot/$SECCOMP" ]; then
+  if [ -f "$SYSROOT/etc/openbot/$SECCOMP" ]; then
+    say "The sandbox's two profiles stay on this server: /etc/openbot/$SECCOMP and /etc/apparmor.d/$APPARMOR_PROFILE."
+  elif [ -f "$SYSROOT/etc/mausbot/$SECCOMP" ]; then
     say "The sandbox's two profiles stay on this server: /etc/mausbot/$SECCOMP and /etc/apparmor.d/$APPARMOR_PROFILE."
   fi
-  if [ -n "$(docker ps -aq --filter name=mausbot-connector 2>/dev/null || true)" ]; then
+  if [ -n "$(docker ps -aq --filter name=openbot-connector 2>/dev/null || true)" ] || [ -n "$(docker ps -aq --filter name=mausbot-connector 2>/dev/null || true)" ]; then
     say "This server is still connected to OpenBot. To disconnect it, run the uninstall command OpenBot shows for the connector."
   fi
 }

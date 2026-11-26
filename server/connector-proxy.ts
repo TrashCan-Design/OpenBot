@@ -84,7 +84,7 @@ function initializeResult(id: unknown, protocolVersion: unknown): Json {
     result: {
       protocolVersion: typeof protocolVersion === "string" && protocolVersion ? protocolVersion : "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "openmausbot-connectors", version: "1" },
+      serverInfo: { name: "openbot-connectors", version: "1" },
     },
   };
 }
@@ -113,7 +113,10 @@ async function readBounded(response: Response): Promise<string> {
 function parseUpstream(text: string, id: unknown): Json | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
-  if (trimmed.startsWith("{")) return JSON.parse(trimmed) as Json;
+  if (trimmed.startsWith("{")) {
+    const parsed: unknown = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Json) : null;
+  }
   const frames = trimmed
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
@@ -121,7 +124,8 @@ function parseUpstream(text: string, id: unknown): Json | null {
     .filter((line) => line && line !== "[DONE]")
     .flatMap((line) => {
       try {
-        return [JSON.parse(line) as Json];
+        const parsed: unknown = JSON.parse(line);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? [parsed as Json] : [];
       } catch {
         return [];
       }
@@ -181,6 +185,7 @@ function connectorAdds(args: unknown): { requests: ConnectorRequest[]; badAuthCo
   for (const item of toolkits) {
     if (typeof item === "string") {
       const slug = item.trim().toLowerCase();
+      if (!slug) continue;
       const key = JSON.stringify([slug, ""]);
       if (!seen.has(key)) {
         seen.add(key);
@@ -195,6 +200,7 @@ function connectorAdds(args: unknown): { requests: ConnectorRequest[]; badAuthCo
     const slug = typeof row.toolkit === "string" ? row.toolkit : row.name;
     if (typeof slug !== "string") continue;
     const normalized = slug.trim().toLowerCase();
+    if (!normalized) continue;
     const alias = (typeof row.alias === "string" ? row.alias : typeof row.account === "string" ? row.account : "").trim();
     const key = JSON.stringify([normalized, alias.toLowerCase()]);
     if (seen.has(key)) continue;
@@ -291,12 +297,12 @@ async function handle(received: Json): Promise<void> {
   }
   let changed: string[] = [];
   if (method === "tools/call") {
-    const given = (message.params ?? {}) as Json;
+    const given = (message.params && typeof message.params === "object" && !Array.isArray(message.params) ? message.params : {}) as Json;
     const name = String(given.name ?? "");
     const fitted = SCHEMAS.has(name) ? fitArguments(given.arguments, SCHEMAS.get(name)) : { args: given.arguments, changed: [] };
     changed = fitted.changed;
     if (changed.length) message = { ...message, params: { ...given, arguments: fitted.args } };
-    const params = (message.params ?? {}) as Json;
+    const params = (changed.length ? message.params : given) as Json;
     const { requests, badAuthConfig } = /MANAGE_CONNECTIONS$/i.test(name)
       ? connectorAdds(params.arguments)
       : { requests: [], badAuthConfig: false };
@@ -382,6 +388,7 @@ input.on("line", (line) => {
   } catch {
     return;
   }
+  if (!message || typeof message !== "object" || Array.isArray(message)) return;
   if (message.method === "tools/call" && message.params !== null && typeof message.params === "object"
     && unsafeArgumentOwners.has(message.params)) {
     if (message.id !== undefined) send(textResult(message.id,

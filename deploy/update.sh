@@ -35,8 +35,8 @@ umask 022
 # update half-way. Output to a terminal that has gone is lost; .update/update.log keeps it.
 trap '' HUP PIPE
 
-REPO="ghcr.io/TrashCan-Design/openbot"
-PINNED="^ghcr\.io/TrashCan-Design/openbot@sha256:[0-9a-f]{64}$"
+REPO="ghcr.io/trashcan-design/openbot"
+PINNED="^ghcr\.io/trashcan-design/openbot@sha256:[0-9a-f]{64}$"
 STABLE_URL=${OPENBOT_STABLE_URL:-${OMB_STABLE_URL:-https://raw.githubusercontent.com/TrashCan-Design/OpenBot/channels/stable.json}}
 NEWEST_URL=${OPENBOT_NEWEST_URL:-${OMB_NEWEST_URL:-https://api.github.com/repos/TrashCan-Design/OpenBot/releases/latest}}
 SERVICE=${OPENBOT_UPDATE_SERVICE:-${OMB_UPDATE_SERVICE:-}}
@@ -65,7 +65,8 @@ LAST="$STATE/last"
 LOCK="$STATE/lock"
 LOG="$STATE/update.log"
 cd "$DIR" 2>/dev/null || { printf '%s\n' "There is no folder $DIR."; exit 4; }
-if [ -z "$SERVICE" ]; then
+SERVICE_ASKED=$SERVICE
+detect_service() {
   if grep -qE '^[[:space:]]*openbot:' docker-compose.yml compose.yaml 2>/dev/null; then
     SERVICE=openbot
   elif grep -qE '^[[:space:]]*omb:' docker-compose.yml compose.yaml 2>/dev/null; then
@@ -73,7 +74,8 @@ if [ -z "$SERVICE" ]; then
   else
     SERVICE=openbot
   fi
-fi
+}
+[ -n "$SERVICE" ] || detect_service
 # The pin is read from .env, never from the shell that happens to run this.
 unset OPENBOT_IMAGE OMB_IMAGE
 
@@ -166,7 +168,7 @@ fetch() {
   local url=$1 got code rc headers
   BODY=""
   if command -v curl >/dev/null 2>&1; then
-    got=$(curl -sSL --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null)
+    got=$(curl -sSL --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null 9>&-)
     rc=$?
     code=${got##*$'\n'}
     BODY=${got%$'\n'*}
@@ -177,7 +179,7 @@ fetch() {
     esac
   fi
   headers=$(mktemp) || return 2
-  BODY=$(wget -S -T 20 -qO- "$url" 2>"$headers")
+  BODY=$(wget -S -T 20 -qO- "$url" 2>"$headers" 9>&-)
   rc=$?
   if [ "$rc" = 0 ]; then rm -f "$headers"; return 0; fi
   BODY=""
@@ -225,10 +227,14 @@ take_lock() {
     fi
     rm -rf "$LOCK"
   fi
-  exec 9>>"$LOCK"
+  if ! exec 9>>"$LOCK" 2>/dev/null; then
+    printf '%s\n' "Could not open lock file $LOCK."
+    exit 4
+  fi
   local flock_status=0
   flock -n 9 || flock_status=$?
   if [ "$flock_status" -ne 0 ]; then
+    exec 9>&- 2>/dev/null || true
     if [ "$flock_status" -eq 1 ]; then
       local other
       other=$(cat "$LOCK" 2>/dev/null || true)
@@ -288,13 +294,13 @@ drop_older_copies() {
 # entries swapped for it, by renames on one filesystem. A restore that fails before the swap leaves the data as it was.
 put_back() { # backup data image
   helper "$3" "$1:/from:ro" "$2:/to" -- "$VERIFY"'set -u
-stage=/to/.omb-restore
-old=/to/.omb-replaced
-rm -rf "$stage" "$old"
+stage=/to/.openbot-restore
+old=/to/.openbot-replaced
+rm -rf "$stage" "$old" /to/.omb-restore /to/.omb-replaced
 mkdir "$stage" || exit 1
 if ! cp -a /from/. "$stage"/ || ! same /from "$stage"; then rm -rf "$stage"; exit 1; fi
 mkdir "$old" || exit 1
-find /to -mindepth 1 -maxdepth 1 ! -name .omb-restore ! -name .omb-replaced -exec mv {} "$old"/ \; || exit 1
+find /to -mindepth 1 -maxdepth 1 ! -name .openbot-restore ! -name .openbot-replaced -exec mv {} "$old"/ \; || exit 1
 find "$stage" -mindepth 1 -maxdepth 1 -exec mv {} /to/ \; || exit 1
 rmdir "$stage" && rm -rf "$old"'
 }
@@ -327,8 +333,16 @@ pin_previous() {
 pin_image() { # writes OPENBOT_IMAGE=<ref> (or OMB_IMAGE=<ref> when present) into .env, keeping other lines and mode
   local tmp="$DIR/.env.update.tmp"
   local var="OPENBOT_IMAGE"
-  if [ -f .env ] && grep -q '^OMB_IMAGE=' .env && ! grep -q '^OPENBOT_IMAGE=' .env; then var="OMB_IMAGE"; fi
-  if [ -f .env ]; then cp -p .env "$tmp" && grep -v -E '^(OPENBOT_IMAGE|OMB_IMAGE)=' .env >"$tmp"; else : >"$tmp" && chmod 600 "$tmp"; fi
+  if { [ -f .env ] && grep -q '^OMB_IMAGE=' .env && ! grep -q '^OPENBOT_IMAGE=' .env; } ||
+     { grep -q 'OMB_IMAGE' compose.yaml docker-compose.yml 2>/dev/null && ! grep -q 'OPENBOT_IMAGE' compose.yaml docker-compose.yml 2>/dev/null; }; then
+    var="OMB_IMAGE"
+  fi
+  if [ -f .env ]; then
+    cp -p .env "$tmp" || return 1
+    { grep -v -E '^(OPENBOT_IMAGE|OMB_IMAGE)=' .env >"$tmp" || [ $? -eq 1 ]; } || { rm -f "$tmp"; return 1; }
+  else
+    : >"$tmp" && chmod 600 "$tmp" || return 1
+  fi
   printf '%s=%s\n' "$var" "$1" >>"$tmp" && mv "$tmp" .env
 }
 keep_env() {
@@ -350,7 +364,7 @@ restore_env() {
 # containers looked healthy. The installer rewrites its own two files at every run; an update does the same, with the
 # copies below, which are the installer's own (scripts/server-installer.test.ts keeps them equal).
 INSTALLER_MARK="# Written by OpenBot's installer (deploy/install.sh)"
-old_installer_layout() { [ -f compose.yaml ] && grep -qF "$INSTALLER_MARK" compose.yaml && grep -q '^ *network_mode: "service:omb"' compose.yaml; }
+old_installer_layout() { [ -f compose.yaml ] && grep -qF "$INSTALLER_MARK" compose.yaml && grep -qE '^ *network_mode: "service:(omb|openbot)"' compose.yaml; }
 # A Compose file of this repository's (path B) with Caddy in the server's network: `git pull` brings the current one.
 old_repository_layout() { [ -f docker-compose.yml ] && grep -qE '^ *network_mode: "service:(omb|openbot)"' docker-compose.yml; }
 move_installer_layout() {
@@ -367,8 +381,8 @@ installer_compose() {
 # back in a new one, and left Caddy refusing HTTPS in the old one.
 name: openbot
 services:
-  omb:
-    image: ${OMB_IMAGE:?run the installer again}
+  openbot:
+    image: ${OPENBOT_IMAGE:-${OMB_IMAGE:?run the installer again}}
     restart: unless-stopped
     init: true
     shm_size: 512m
@@ -376,22 +390,34 @@ services:
       - ./data:/data
       - edge:/run/openbot
     environment:
+      OPENBOT_PORT: "8799"
+      OPENBOT_WEBHOOK_PORT: "8800"
+      OPENBOT_TUNNEL_SOCKET: /run/openbot/http.sock
+      OPENBOT_WEBHOOK_SOCKET: /run/openbot/hooks.sock
+      OPENBOT_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_PUBLIC_URL: https://${DOMAIN}
+      OPENBOT_SERVER_NAME: ${OPENBOT_SERVER_NAME:-${OMB_SERVER_NAME:-${DOMAIN}}}
+      # Passed only when .env sets them: an empty one would still be set, and Settings' own lists are used when not.
+      OPENBOT_SIGNIN_EMAILS:
+      OPENBOT_SIGNIN_MEMBER_EMAILS:
+      OPENBOT_SIGNIN_SMTP_URL:
+      OPENBOT_SIGNIN_SMTP_FROM:
+      # "1": phones pair by QR through OpenBot Relay. Sign in once: docker compose exec openbot openbot login --relay
+      OPENBOT_PHONE_RELAY:
       OMB_PORT: "8799"
       OMB_WEBHOOK_PORT: "8800"
       OMB_TUNNEL_SOCKET: /run/openbot/http.sock
       OMB_WEBHOOK_SOCKET: /run/openbot/hooks.sock
       OMB_WEBHOOK_PUBLIC_URL: https://${DOMAIN}
       OMB_PUBLIC_URL: https://${DOMAIN}
-      OMB_SERVER_NAME: ${OMB_SERVER_NAME:-${DOMAIN}}
-      # Passed only when .env sets them: an empty one would still be set, and Settings' own lists are used when not.
+      OMB_SERVER_NAME: ${OPENBOT_SERVER_NAME:-${OMB_SERVER_NAME:-${DOMAIN}}}
       OMB_SIGNIN_EMAILS:
       OMB_SIGNIN_MEMBER_EMAILS:
       OMB_SIGNIN_SMTP_URL:
       OMB_SIGNIN_SMTP_FROM:
-      # "1": phones pair by QR through OpenBot Relay. Sign in once: docker compose exec omb openbot login --relay
       OMB_PHONE_RELAY:
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8799/api/health | grep -q openbot"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8799/api/health | grep -qE 'openbot|openmausbot'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -405,7 +431,7 @@ services:
     # Started with the server, not after it is healthy: Caddy reaches it over the socket
     # whenever it answers, so `up` never waits on the server's health.
     depends_on:
-      omb:
+      openbot:
         condition: service_started
     environment:
       DOMAIN: ${DOMAIN}
@@ -464,9 +490,11 @@ stop_server() {
   [ -z "$cid" ] || [ "$(inspect '{{.State.Running}}' "$cid")" = false ]
 }
 
-answers() { compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/api/health"' 2>/dev/null | grep -q openbot; }
+answers() { compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/api/health"' 2>/dev/null | grep -qE 'openbot|openmausbot'; }
 reported_version() {
-  compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/.well-known/openbot/environment"' 2>/dev/null | json_top version
+  local body
+  body=$(compose exec -T "$SERVICE" sh -c 'curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/.well-known/openbot/environment" || curl -sf --max-time 5 "http://127.0.0.1:${OPENBOT_PORT:-${OMB_PORT:-8799}}/.well-known/openmausbot/environment"' 2>/dev/null)
+  printf '%s' "$body" | json_top version
 }
 # How many engines can start a bot, as the server counts them (GET /api/health/engines, which a hardened server answers
 # a local caller without a session); nothing from a version without that count.
@@ -532,7 +560,6 @@ wait_whole() {
 }
 
 finish() {
-  exec 9>&- 2>/dev/null || true
   cp "$JOURNAL" "$LAST.tmp" && mv "$LAST.tmp" "$LAST"
   rm -f "$JOURNAL"
   say "Updated from $(old_name) to $(new_name)."
@@ -556,9 +583,12 @@ roll_back() { # why, exit code when the old version is back
     exit 2
   fi
   if ! docker volume inspect "$J_backup" >/dev/null 2>&1; then
+    local up_flags=(up -d --no-build)
+    if [ -f "$STATE/compose.yaml.before" ]; then up_flags+=(--remove-orphans); fi
     restore_env
+    [ -n "$SERVICE_ASKED" ] || detect_service
     pin_previous
-    compose up -d --no-build >>"$LOG" 2>&1
+    compose "${up_flags[@]}" >>"$LOG" 2>&1
     rm -f "$JOURNAL" "$LAST"
     say "The copy of the data from before the update ($J_backup) is missing, so the data was left as it is. The server runs $(old_name) again."
     exit 2
@@ -569,13 +599,16 @@ roll_back() { # why, exit code when the old version is back
     say "Once the cause is fixed (often disk space), ./update.sh --rollback tries again. To run the server on the data as it is instead: docker compose up -d (that starts $(new_name) again)."
     exit 2
   fi
+  local up_flags=(up -d --no-build)
+  if [ -f "$STATE/compose.yaml.before" ]; then up_flags+=(--remove-orphans); fi
   restore_env
+  [ -n "$SERVICE_ASKED" ] || detect_service
   pin_previous
-  compose up -d --no-build >>"$LOG" 2>&1
+  compose "${up_flags[@]}" >>"$LOG" 2>&1
   if [ "$(inspect '{{.Image}}' "$(container)")" != "$J_previous_id" ]; then
     # .env named a tag that has moved since: the image kept aside at the swap is the one that ran.
     pin_image "$KEEP_TAG"
-    compose up -d --no-build >>"$LOG" 2>&1
+    compose "${up_flags[@]}" >>"$LOG" 2>&1
   fi
   if wait_healthy "$J_previous_id"; then back=yes; fi
   rm -f "$JOURNAL" "$LAST"
@@ -850,15 +883,21 @@ phase swap
 rm -f "$LAST"
 drop_older_copies
 say "Starting $(new_name)…"
+up_flags=(up -d --no-build)
 if old_installer_layout; then
-  if move_installer_layout; then say "Caddy moves to its own container, so HTTPS stays up whenever the server restarts on its own."
-  else roll_back "The installer's compose.yaml and Caddyfile could not be rewritten (see $LOG)." 1; fi
+  if move_installer_layout; then
+    say "Caddy moves to its own container, so HTTPS stays up whenever the server restarts on its own."
+    [ -n "$SERVICE_ASKED" ] || detect_service
+    up_flags+=(--remove-orphans)
+  else
+    roll_back "The installer's compose.yaml and Caddyfile could not be rewritten (see $LOG)." 1
+  fi
 fi
 pin_image "$J_target"
 # Where Caddy waits for a healthy server (a Compose file from before Caddy had its own container), `up` itself waits,
 # and fails when the new version never gets there; the wait below then says why. The current files start Caddy with
 # the server, so `up` returns at once and the wait below is the only one.
-if ! compose up -d --no-build >>"$LOG" 2>&1 && [ "$(inspect '{{.Image}}' "$(container)")" != "$J_target_id" ]; then
+if ! compose "${up_flags[@]}" >>"$LOG" 2>&1 && [ "$(inspect '{{.Image}}' "$(container)")" != "$J_target_id" ]; then
   roll_back "Docker could not start $(new_name) (see $LOG)." 1
 fi
 

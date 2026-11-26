@@ -41,6 +41,9 @@ describe("plainPreviewText", () => {
     ["Heading\n-", "Heading"],
     ["Heading\n--", "Heading"],
     ["Heading 1\n===\nHeading 2\n---", "Heading 1 Heading 2"],
+    ["Heading\n\n===", "Heading ==="],
+    ["   \n=", "="],
+    ["Heading 1\n===\nHeading 2\n==", "Heading 1 Heading 2"],
   ])("reads %j as plain text", (input, expected) => {
     expect(plainPreviewText(input)).toBe(expected);
   });

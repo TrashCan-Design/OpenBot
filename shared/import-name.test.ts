@@ -55,4 +55,11 @@ describe("takeImportName", () => {
     const taken = new Set<string>(["a", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     expect(takeImportName("a", taken, 1)).toBe("10");
   });
+
+  it("handles zero and negative maxLength boundaries", () => {
+    const taken = new Set<string>();
+    expect(takeImportName("abc", taken, 0)).toBe("");
+    expect(takeImportName("abc", taken, 0)).toBe("2");
+    expect(takeImportName("xyz", new Set<string>(), -5)).toBe("");
+  });
 });
