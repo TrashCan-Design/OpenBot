@@ -1,0 +1,506 @@
+================================================================================
+OPENBOT DUAL-ENGINE BROWSER & LINUX REMOTE DESKTOP INTEGRATION GUIDE
+================================================================================
+Target File       : integrate.txt
+Reference Spec    : fast.txt
+Target Repository : https://github.com/TrashCan-Design/OpenBot
+Target Branch     : release/0.1.144 (keep codex/windows-installer untouched)
+Architecture      : 1. h4ckf0r0day/obscura (v0.2.6+ Rust Headless CDP/MCP Engine)
+                    2. qutebrowser/qutebrowser (Keyboard/IPC-Driven X11 GUI Browser)
+                    3. OpenBot Linux Remote Desktop (trycua/xfce-cua Local VM & VPS)
+                    4. OpenBot Desktop App (Electron + Native Browser Bundle)
+                    5. OpenBot Companion Sidecar & Android Mobile App
+================================================================================
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. Executive Summary & Architectural Invariants
+2. Critical Corrections & Gaps Identified in fast.txt
+3. Phase 0 (Blocking Prerequisite): Security, Env Allow-Lists & Config Schema
+4. Phase 1: Linux Remote Desktop Container & VPS Provisioning
+5. Phase 2: Server Dual-Engine Routing, browser_batch, Reclaim & Shutdown
+6. Phase 3: Build, Packaging, Electron Native Resolution & Smoke Harness
+7. Phase 4: Companion Sidecar, Web/Desktop UI & Android Mobile Integration
+8. Phase 5: End-to-End Verification Matrix, Open Prerequisites & Rollback Plan
+================================================================================
+
+
+1. EXECUTIVE SUMMARY & ARCHITECTURAL INVARIANTS
+--------------------------------------------------------------------------------
+OpenBot Dual-Engine splits browser automation across two complementary local
+execution tiers without modifying or weakening existing security boundaries:
+
+- Tier A (Autonomous Headless - Obscura Engine, CDP :9222):
+  Lightweight statically linked Rust headless engine for high-throughput,
+  low-latency DOM navigation, extraction, and batched macro execution.
+  Runs locally (packaged binary) or inside the Linux container/VPS.
+
+- Tier B (Visual / Interactive - Qutebrowser on X11 DISPLAY :1, CDP :9223):
+  Keyboard- and IPC-driven QtWebEngine GUI browser running inside the hardened
+  trycua/xfce-cua container/VPS on DISPLAY :1, bridged via an authenticated
+  Unix socket (/run/user/1000/openbot-qute-bridge.sock) and noVNC/SSE takeover.
+
+Mandatory Invariants (Verified on release/0.1.144):
+1. Target release/0.1.144 ONLY; keep codex/windows-installer untouched.
+2. Strictly honor banned-list rules: zero Boat VMs, zero cloud relay
+   (serve --relay), zero guest meeting bots, zero vendor hosting/billing.
+3. Strict openbot / OPENBOT_ / com.openbot.* primary branding for all new
+   identifiers, environment variables, labels, and sockets. Keep OMB_* /
+   com.openmausbot.* strictly as backward-compatible read fallbacks where
+   existing contracts require them.
+4. Preserve BATCH_RUNNERS in server/computer-tool-list.ts:17,25-27
+   (run_steps and run_script remain blocked on the CUA computer MCP server).
+   Batching is ONLY added as schema-validated browser_batch on the browser
+   MCP server.
+5. Keep zero published CDP ports on containers/VPS (preserve
+   dockerPortsAreLocal() in server/container-computer.ts:667-692 and
+   hasNoPublishedPorts() in server/vps-computer.ts:459-473) by tunneling CDP
+   and MCP over `docker exec -i` + `socat`.
+
+
+2. CRITICAL CORRECTIONS & GAPS IDENTIFIED IN fast.txt
+--------------------------------------------------------------------------------
+Codebase inspection on release/0.1.144 uncovered the following discrepancies in
+fast.txt that MUST be handled as documented below during implementation:
+
+1. fast.txt §4.4 ("browser_batch & run_steps") vs. BATCH_RUNNERS Invariant:
+   - fast.txt line 28 mentions `run_steps`.
+   - server/computer-tool-list.ts:17,25-27 intentionally blocks `run_steps` and
+     `run_script` (`BATCH_RUNNERS`) on CUA computer tools.
+   - Correction: Reject `run_steps` for CUA completely; implement ONLY
+     schema-validated `browser_batch` on the `browser` MCP server (without
+     any `eval` step), and leave server/computer-tool-list.ts untouched.
+
+2. BrowserRuntime vs. ChromeEngine (`BrowserService`) Dispatch Split:
+   - server/browser/tools.ts and server/browser/dispatch.ts serve ONLY
+     ChromeEngine (server/browser/service.ts:30,394).
+   - BrowserRuntime (server/browser-runtime.ts:577-581,989-994) fetches
+     tools/list from the child MCP process and appends `withOmbTools(...)`.
+   - Correction: Unless `obscura mcp` natively exposes `browser_batch`,
+     register `BROWSER_BATCH_TOOL_SPEC` in BOTH `server/browser/tools.ts` AND
+     `BrowserRuntime` (`withOmbTools` / `agentRequest`), enforcing `BrowserLanes`,
+     `gate.owner === null`, `deadline`, `SecretHolds`, and `scrubBrowserResult`.
+
+3. `browser_batch` `fill` Step Schema Field Name:
+   - fast.txt:208-209 uses `"value"` in `fill`.
+   - server/browser/tools.ts:59 (`agent_browser_fill`) uses `"text"`.
+   - Correction: Use `"text"` for `browser_batch`'s `fill` step to stay
+     consistent with `agent_browser_fill`.
+
+4. `ensureManagedBrowserConfig` & Egress Purpose:
+   - fast.txt:199 claims `managedBrowserConfigPath` blocks local files/networks.
+   - Actual server/browser-engine.ts:66-75 writes `{}\n` so user `~/.agent-browser`
+     configs cannot leak shared profiles; egress blocking is enforced by
+     `browserEgress` (`server/browser/egress/gate.ts`) via `AGENT_BROWSER_PROXY`.
+
+5. QtWebEngine `--no-sandbox` Requirement Inside Hardened Containers:
+   - server/container-computer.ts:900-906 and server/vps-computer.ts:892-897 run
+     containers with `--cap-drop ALL --cap-add SETUID --cap-add SETGID` and
+     seccomp blocking unprivileged user namespaces.
+   - Correction: `/etc/qutebrowser/config.py` MUST set
+     `c.qt.args = ["remote-debugging-port=9223", "--no-sandbox"]` (alongside
+     `--shm-size 512m`), and Debian 12 must install Qt6/XCB deps + `pip`
+     `PyQt6-WebEngine` (fast.txt:141's `python3-pyqt6.qtwebengine` apt name is
+     invalid on Debian 12).
+
+6. `vps-computer.ts` Stdin Docker Build Context:
+   - server/vps-computer.ts:926-929 builds via `docker -H ssh://<alias> build -`
+     with empty build context (`input: managedImageDockerfile()`).
+   - Correction: Never use `COPY` inside `managedImageDockerfile()`. All new
+     scripts/configs (`/etc/qutebrowser/config.py`, startup scripts, and
+     `cua-qutebrowser-bridge.py`) must be inlined via `RUN printf` / heredocs.
+
+7. `vps-computer.ts` Screenshot `"jpeg:"` Prefix & Dimensions:
+   - server/container-computer.ts:1035-1041 downscales to `(1280, 720)` quality
+     75 with `"jpeg:"` prefix and strips it at lines 1086-1092.
+   - server/vps-computer.ts:65-71 uses `(1280, 1280)` quality 70 without `"jpeg:"`,
+     and lines 1391-1394 pass `stdout.trim()` straight to `Buffer.from`.
+   - Correction: When aligning `vps-computer.ts` with `SCREENSHOT_TRANSFER`,
+     also update lines 1391-1394 to strip `"jpeg:"` before base64 decoding.
+
+8. Electron & Packaging Verification Contracts:
+   - `scripts/after-pack.mjs:148-151` calls `verifyBrowserBundle()`, and
+     `scripts/smoke-packaged-server.mjs:18-30` enforces exact `manifest.json`
+     schema + `["engine", "chrome"]` checks. Do NOT replace `verifyBrowserBundle`
+     with a single `requireRegularFile(obscura.exe)`; extend
+     `browserBundleSpec` / `prepare-browser.mjs` / `smoke-packaged-server.mjs`.
+   - `scripts/smoke-browser-bundle.mjs:19-28` requires `--resources <abs-path>`
+     and rejects unknown flags like `--engine=obscura` unless added explicitly.
+   - `electron/main.mjs:355-365` runs `taskkill /PID <pid> /T /F` immediately
+     on `win32` shutdown, bypassing graceful browser daemon cleanup.
+   - `com.openmausbot.app` (`electron-builder.yml:1`, `package.json:16`,
+     `electron/cua.mjs:38`, `electron/cua-linux-runtime.cjs:18`) is coupled to
+     CUA daemon binary metadata (`host_bundle_id`); do not change mid-release
+     without coordinated CUA/desktop migration.
+
+9. Android `CloudDesktopBrowser.kt` vs. `viewer-relay.ts` / `proxy.ts`:
+   - `CloudDesktopSessionSerializer` (`android/core/.../Models.kt:746-753`)
+     rejects relative URLs and non-HTTPS URLs, whereas `CompanionViewerRelay`
+     (`companion/src/viewer-relay.ts:244`) rewrites `joinUrl` to relative
+     `/vps-viewer/<id>/vnc.html#...` (using `#` fragment, not `?` query).
+   - `companion/src/proxy.ts:367-372,737-742` rejects any `Origin` header and
+     requires `Authorization: Bearer <token>`, which Chrome Custom Tabs cannot
+     attach to subresources/WebSockets.
+   - `CloudDesktopBrowserTest.kt` (cited in `fast.txt:501`) does not exist yet.
+   - Correction: Keep mobile interactive takeover on `BrowserControlScreen.kt`
+     (SSE `/browser/live` + `/browser/action` + `/browser/engine-switch`), OR
+     add an Android loopback HTTP/WS bridge that injects `Authorization: Bearer`
+     and strips `Origin`.
+
+10. `RemoteDesktopPanel.tsx` Path & `/vps-viewer/` in `src/`:
+    - The actual file is lowercase `src/components/remote-desktop-panel.tsx`
+      (opening `window.ogb.desktopViewer.open(...)` at lines 174-210);
+      `/vps-viewer/` does not exist in `src/`.
+
+
+3. PHASE 0 (BLOCKING PREREQUISITE): SECURITY, ENV ALLOW-LISTS & CONFIG SCHEMA
+--------------------------------------------------------------------------------
+Before introducing any `OPENBOT_*` dual-engine secrets or endpoints, close the
+sandbox allow-list gap in `server/bot-box/env.ts` and `server/credential-env.ts`.
+
+3.1 Harden `server/bot-box/env.ts` & `server/credential-env.ts`
+- File: `server/credential-env.ts:5-57`
+  - Add `OPENBOT_*` equivalents to `WORKSPACE_CREDENTIAL_ENV`, add
+    `OPENBOT_CONTROL_TOKEN`, `OPENBOT_LINUX_DESKTOP_TOKEN`, etc. to
+    `CONTROL_PLANE_ENV`, and add `"OPENBOT_CLOUD_"` alongside
+    `CONTROL_PLANE_ENV_PREFIX = "OMB_CLOUD_"`.
+- File: `server/bot-box/env.ts:17-58`
+  - Problem: `BOX_ENV_PREFIXES` (`line 36`) blanket-allows `"OPENBOT_"` and
+    `"OPENMAUSBOT_"`, and `line 54` only checks `!name.startsWith("OMB_")`.
+  - Fix:
+    1) Replace `"OPENBOT_"` and `"OPENMAUSBOT_"` in `BOX_ENV_PREFIXES` with an
+       explicit `BOX_ENV_OPENBOT_NAMES` allow-list containing ONLY vars child
+       processes genuinely read (`OPENBOT_RESOURCES_PATH`,
+       `OPENBOT_AGENT_BROWSER_PATH`, `OPENBOT_ACP_SHARED_RECYCLE_MS`, and the
+       11 `OPENBOT_*` vars in `server/connector-proxy.ts:25-53`).
+    2) Add `OPENBOT_*` sensitive vars (`OPENBOT_DATA_DIR`, `OPENBOT_PUBLIC_URL`,
+       `OPENBOT_SIGNIN_EMAILS`, `OPENBOT_CONTROL_TOKEN`, etc.) to `BOX_ENV_NEVER`
+       and `"OPENBOT_CLOUD_"` to `BOX_ENV_NEVER_PREFIXES`.
+    3) Update line 54 guard to `!name.startsWith("OMB_") && !name.startsWith("OPENBOT_")`
+       while preserving per-instance `allow` (`instanceEnvNames`) for legacy
+       `OPENMAUSBOT_*` provider keys (`OPENMAUSBOT_TOKEN` /
+       `OPENMAUSBOT_CHATGPT_TOKEN` blocked via `BOX_ENV_NEVER`).
+  - Verify: `pnpm vitest run server/bot-box/env.test.ts` (add `OPENBOT_*` tests).
+
+3.2 Extend Browser Config Schema
+- File: `server/browser/config.ts:19-40`
+  - Extend `BrowserEngineKind`:
+    ```ts
+    export type BrowserEngineKind = "agent-browser" | "chrome" | "dual";
+    ```
+  - Extend `browserEngineConfigSchema`:
+    ```ts
+    export const dualBrowserConfigSchema = z.object({
+      obscuraPort: z.number().int().min(1024).max(65535).optional(),
+      qutebrowserPort: z.number().int().min(1024).max(65535).optional(),
+      qutebrowserSocket: z.string().max(512).optional(),
+    }).strict();
+
+    export const browserEngineConfigSchema = z.object({
+      engine: z.enum(["agent-browser", "chrome", "dual"]).optional(),
+      attachCdpUrl: z.string().max(1_024).optional(),
+      chromePath: z.string().max(1_024).optional(),
+      dual: dualBrowserConfigSchema.optional(),
+    }).strict();
+    ```
+- File: `server/routes/config.ts:180,574` & `src/state/config-status.ts:153-172`
+  - Ensure `PATCH /api/config` (`switchingBrowserEngine`) calls
+    `browserEngineSwitched()` when switching to/from `"dual"` so stale Obscura
+    or Qutebrowser sessions are torn down cleanly.
+- Canonical shared schemas in `shared/wire.ts` (or `shared/browser-dual.ts`):
+  - Define Zod schemas for `POST /api/bots/:id/browser/engine-switch` and
+    `POST /api/bots/:id/browser/batch` shared by server, companion, and UI.
+
+
+4. PHASE 1: LINUX REMOTE DESKTOP CONTAINER & VPS PROVISIONING
+--------------------------------------------------------------------------------
+4.1 Bump `IMAGE_LAYER_VERSION` & Update `managedImageDockerfile()`
+- Files: `server/container-computer.ts:33,129-196`,
+  `server/container-workspace.ts:1-39`, `server/container-computer.test.ts:907`
+- Step 1: Bump `IMAGE_LAYER_VERSION = "8"` and update test at line 907.
+- Step 2: Update `workspacePreparationDockerfile()` in
+  `server/container-workspace.ts` to create and `chmod 0700` both
+  `"$profiles/obscura"` and `"$profiles/qutebrowser"`.
+- Step 3: Inside `managedImageDockerfile()` (using inline `RUN` / `printf`
+  ONLY — never `COPY`, because `vps-computer.ts:926-929` uses `docker build -`):
+  1) Install XCB/Qt6 runtime libraries and `socat`:
+     ```dockerfile
+     RUN apt-get update && apt-get install -y --no-install-recommends \
+           socat libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+           libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+           libxcb-xkb1 libxkbcommon-x11-0 libnss3 libnspr4 libgbm1 libasound2 \
+         && rm -rf /var/lib/apt/lists/*
+     ```
+  2) Install pinned `obscura` (`v0.2.6+`) for `uname -m` (`x86_64` / `aarch64`)
+     with SHA-256 verification to `/usr/local/bin/obscura` (`chmod 0755`), and
+     verify `/usr/local/bin/obscura --version`.
+  3) Install Qutebrowser + PyQt6 + QtWebEngine + IPC deps in `/opt/venv`:
+     ```dockerfile
+     RUN /opt/venv/bin/pip install --no-cache-dir \
+           qutebrowser PyQt6 PyQt6-WebEngine websockets aiohttp Pillow
+     ```
+  4) Write `/etc/qutebrowser/config.py`:
+     ```python
+     config.load_autoconfig(False)
+     c.qt.args = ["remote-debugging-port=9223", "--no-sandbox"]
+     c.content.javascript.clipboard = "access-paste"
+     c.headers.user_agent = "Mozilla/5.0 OpenBot/1.0"
+     ```
+  5) Write `/usr/local/bin/start-openbot-obscura.sh` (`supervisord` `priority=25`,
+     `user=cua`):
+     ```sh
+     #!/bin/sh
+     set -eu
+     /usr/local/bin/prepare-openmausbot-workspace.sh
+     mkdir -p /home/cua/.config/obscura /home/cua/workspace/.browser-profiles/obscura
+     exec /usr/local/bin/obscura serve --port 9222 --stealth
+     ```
+  6) Write `/usr/local/bin/start-openbot-qutebrowser.sh` (`supervisord`
+     `priority=32`, `user=cua`, `DISPLAY=":1"`, `XDG_RUNTIME_DIR="/run/user/1000"`):
+     ```sh
+     #!/bin/sh
+     set -eu
+     /usr/local/bin/prepare-openmausbot-workspace.sh
+     attempt=0
+     until DISPLAY=:1 xset q >/dev/null 2>&1; do
+       attempt=$((attempt + 1))
+       if [ "$attempt" -ge 45 ]; then
+         echo "X display :1 did not become ready within 45 seconds" >&2
+         exit 1
+       fi
+       sleep 1
+     done
+     mkdir -p /run/user/1000/qutebrowser /home/cua/workspace/.browser-profiles/qutebrowser
+     rm -f /run/user/1000/qutebrowser/ipc-*
+     exec env XDG_RUNTIME_DIR=/run/user/1000 \
+       /opt/venv/bin/qutebrowser \
+       --config-py /etc/qutebrowser/config.py \
+       --basedir /home/cua/workspace/.browser-profiles/qutebrowser \
+       --qt-flag remote-debugging-port=9223 \
+       --qt-flag no-sandbox
+     ```
+  7) Write `/usr/local/libexec/openbot/cua-qutebrowser-bridge.py` (`supervisord`
+     `priority=35`, `user=cua`, `XDG_RUNTIME_DIR="/run/user/1000"`):
+     - Sort `/run/user/1000/qutebrowser/ipc-*` by `os.path.getmtime` descending.
+     - Use newline-delimited JSON framing (`reader.readuntil(b"\n")`, 64 KB cap)
+       with 5.0s `asyncio.wait_for` timeouts.
+     - Pass JSON-encoded arg arrays (`{"args": args, "target_arg": None}\n`)
+       directly to Qutebrowser's IPC socket (no `command.split()`).
+     - Use `:insert-text` (not `:insert`), `:open`, `:scroll-page 0 <dy>`,
+       and `json.dumps(selector)` inside `:jseval` for selector clicks (`:hint`
+       fallback when no selector).
+     - Bind `/run/user/1000/openbot-qute-bridge.sock` with `0o700` dir / `0o600`
+       socket permissions.
+
+4.2 Zero-Port Container/VPS Bridging & `vps-computer.ts` Screenshot Alignment
+- Preserve `dockerPortsAreLocal()`, `applePortsAreLocal()`, and
+  `hasNoPublishedPorts()` by tunneling over `exec -i`:
+  - Obscura MCP: `docker [-H ssh://<alias>] exec -i -u cua <container> /usr/local/bin/obscura mcp`
+  - Obscura CDP: `docker [-H ssh://<alias>] exec -i -u cua <container> socat STDIO TCP:127.0.0.1:9222`
+  - Qutebrowser CDP: `docker [-H ssh://<alias>] exec -i -u cua <container> socat STDIO TCP:127.0.0.1:9223`
+- Align `server/vps-computer.ts:65-71,1391-1394` with
+  `server/container-computer.ts:1035-1041,1086-1092`: import
+  `SCREENSHOT_TRANSFER` (1280x720 JPEG quality 75) and strip the `"jpeg:"` prefix
+  before `Buffer.from(encoded, "base64")`.
+
+4.3 Harness `Dockerfile` (`runtime` stage, `Dockerfile:56-102`)
+- Install pinned `obscura` into `/usr/local/bin/obscura` using `uname -m` +
+  SHA-256 verification (not `npm install`, so `scripts/docker-image.test.ts`
+  `npmInstall` layer counts, `/tmp/` allowlist, and `AGENT_BROWSER_EXECUTABLE_PATH`
+  final `ENV` invariants remain intact).
+
+
+5. PHASE 2: SERVER DUAL-ENGINE ROUTING, browser_batch, RECLAIM & SHUTDOWN
+--------------------------------------------------------------------------------
+5.1 `obscuraIntegration` & Sandbox Sanitizer (`server/browser-engine.ts`)
+- Add `obscuraIntegration()` setting `OPENBOT_BROWSER_CDP_ENDPOINT`
+  (default `http://127.0.0.1:9222`), `OPENBOT_BROWSER_SESSION`,
+  `OPENBOT_BROWSER_PROFILE`, and `gateChromeSettings` proxy env so
+  `browserEgress` (`server/browser/egress/gate.ts`) still governs requests.
+- Strip `--no-sandbox` outside containerized environments
+  (`!existsSync("/.dockerenv")`).
+
+5.2 `DualEngine` Router & CDP Cookie Sync (`server/browser/engines.ts`)
+- Add `DUAL_ENGINE = "openbot-dual"` and `DualEngine` implementing
+  `working(session)`, `watched(session)`, `running(session)`,
+  `persistent(session)`, and `closeUnused(session)`.
+- Per-call surface routing in `RuntimeRouter.agentRpc`:
+  - Default surface: `"headless"` (Obscura on `:9222`).
+  - Escalate to `"gui"` (Qutebrowser on `DISPLAY=:1` `:9223` / `ChromeEngine`)
+    when `args.surface === "gui"`, `humanHeld === true`, `watched === true`, or
+    challenge detection triggers user takeover.
+  - Only run CDP `Storage.getCookies` / `Storage.setCookies` sync between
+    `:9222` and `:9223` when `session.persistent === true` (never on ephemeral
+    or guest sessions).
+  - Run `browserEgress.callRefusal`, `afterClaim`, `annotate`, and `afterCall`
+    before dispatching to either engine.
+
+5.3 Schema-Validated `browser_batch` (Both `ChromeEngine` & `BrowserRuntime`)
+- Keep `server/computer-tool-list.ts` (`BATCH_RUNNERS`) completely untouched.
+- Define `browser_batch` in BOTH `server/browser/tools.ts` (for `ChromeEngine`)
+  AND `withOmbTools` / `agentRequest` in `server/browser-runtime.ts` (for
+  `BrowserRuntime` / `Obscura`):
+  - `steps`: `z.array(batchStep).min(1).max(20)` where `batchStep` is a strict
+    `z.discriminatedUnion("action", ...)` supporting:
+    - `navigate` (`url`)
+    - `wait_for` (`ref?`, `selector?`, `text?`, `load?`, `timeoutMs?`)
+    - `fill` (`ref?`, `selector?`, `text`, `submit?`) — uses `text`, NOT `value`
+    - `click` (`ref?`, `selector?`, `button?`)
+    - `extract` (`ref?`, `selector?`, `maxChars?`)
+    - `screenshot` (`fullPage?`)
+  - Disallow arbitrary JS `eval` inside `browser_batch`.
+  - Execution loop checks `owner !== null`, `Date.now() >= deadline - FOLLOW_UP_MS`,
+    and `holds.refuses()` before each step, and runs `shapeBrowserToolResult` +
+    `scrubBrowserResult` on aggregated outputs so held secrets are never leaked.
+
+5.4 Reclaim, `watched()`, Crash Isolation & Shutdown (`< 8s`)
+- `server/host/browser.ts:438-449`: Dispatch `working`, `watched`, `running`,
+  and `attached` by engine kind so `DualEngine` sessions respect `watched()`
+  under non-thrashing reclaim (`server/host/browser-reclaim.ts:23-27`) and
+  `closeUnused` terminates both Obscura and Qutebrowser PIDs + unlinks sockets.
+- `server/crash-guard.ts:8-11`: Spawn long-lived Obscura/Qutebrowser daemons
+  inside `outsideTurn()` so out-of-turn daemon exits do not fail active turns.
+- `server/graceful-shutdown.ts:8-34` & `server/index.ts:15743-15820`: Register
+  Obscura daemons, Qutebrowser/IPC bridge processes, sockets, and multi-port
+  SSH tunnels (`6901`/`9222`/`9223`) so shutdown completes within `8_000 ms`.
+- `server/routes/browser-viewers.ts`: Preserve frozen `v1` SSE contract
+  (`/browser/live`, `/browser/action`). Add `POST /api/bots/:id/browser/engine-switch`
+  and `POST /api/bots/:id/browser/batch` guarded by `audience()`, `authorize()`,
+  `isCurrent()`, and `isSameOrigin(req)`.
+
+
+6. PHASE 3: BUILD, PACKAGING, ELECTRON NATIVE RESOLUTION & SMOKE HARNESS
+--------------------------------------------------------------------------------
+6.1 Native Bundle Spec & Staging
+- `server/browser-engine-release.ts` & `server/browser-bundle-release.ts`:
+  - Pin `OBSCURA_VERSION` and per-target release artifacts (`linux-x64`,
+    `linux-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64`) with `bytes` and
+    `sha256`.
+  - Extend `browserBundleSpec(target)` (`schemaVersion: 2` or add `obscura`
+    component) and `browserBundlePaths(dir, target)` with `obscura(.exe)`.
+  - Because `electron-builder.yml` (`lines 124-125,167-180,216-226`) already
+    maps `dist-native/browser/<target>` -> `resources/browser-engine`, placing
+    `obscura(.exe)` inside `dist-native/browser/<target>/` requires no
+    `extraResources` rewrite.
+- `scripts/prepare-browser.mjs:88-197`:
+  - Download/verify `spec.obscura`, install `0o755` (`obscura`), add Obscura's
+    license to `BROWSER_LICENSE_FILES`, record in `manifest.json`, and validate
+    in `verifyBrowserBundle()`.
+- `scripts/after-pack.mjs:140-151` & `scripts/smoke-packaged-server.mjs:18-30`:
+  - Keep `verifyBrowserBundle()` active; update `smoke-packaged-server.mjs` to
+    validate `obscura` alongside `["engine", "chrome"]` (if dual-bundled).
+- `scripts/verify-linux-package.mjs`:
+  - Verify `resources/browser-engine/obscura` is ELF `linux-x64` (`0o755`) across
+    `linux-unpacked`, `.deb`, and `.AppImage`.
+
+6.2 Windows Cross-Compilation & Static Linking
+- Create `scripts/build-windows-obscura-vendor.mjs` (or extend vendor build)
+  using `x86_64-pc-windows-gnu` with static CRT flags:
+  `RUSTFLAGS="-C target-feature=+crt-static -C link-args=-static -C link-args=-static-libgcc"`
+  so `obscura.exe` depends ONLY on `kernel32.dll` / `user32.dll` / `ntdll.dll`
+  (zero `libwinpthread-1.dll` / `libgcc_s_seh-1.dll`).
+- Port stdio handle sanitization (`SetHandleInformation` clearing
+  `HANDLE_FLAG_INHERIT` on `stdin`/`stdout`/`stderr` with `INVALID_HANDLE_VALUE`
+  `-1` guard) and `CREATE_NO_WINDOW` (`0x08000000`) on child spawns.
+- Note: Do NOT touch `electron-builder.yml` `appId` (`com.openmausbot.app`) or
+  `package.json` `desktopName` without coordinated CUA binary metadata updates
+  (`electron/cua.mjs:38`, `electron/cua-linux-runtime.cjs:18`).
+
+6.3 Electron Env & Windows Shutdown Ordering (`electron/main.mjs`)
+- `startServerOn` (`electron/main.mjs:1139-1161`): Pass
+  `OPENBOT_RESOURCES_PATH: process.resourcesPath` alongside `OMB_RESOURCES_PATH`
+  and `delete childEnv.OPENBOT_BROWSER_CONNECTION` / `OPENBOT_OBSCURA_PATH`.
+- `stopUtilityServer` (`electron/main.mjs:355-365`): On `win32`, send graceful
+  shutdown IPC to `serverProc` and await a bounded grace window (e.g. 3s within
+  `UTILITY_SERVER_STOP_TIMEOUT_MS = 9_500ms`) before falling back to
+  `taskkill /PID <pid> /T /F`, preventing orphaned detached browser processes.
+
+6.4 Smoke Harness (`scripts/smoke-browser-bundle.mjs`)
+- Preserve required `--resources <abs-path>` and add
+  `--engine <agent-browser|obscura|dual>` so CI can validate `obscura(.exe)`
+  ELF/PE header, SHA-256 manifest, cold-start `< 50 ms`, `obscura serve`
+  `/json/version`, RSS `< 60 MB`, concurrent profile isolation, and tree kill.
+
+
+7. PHASE 4: COMPANION SIDECAR, WEB/DESKTOP UI & ANDROID MOBILE INTEGRATION
+--------------------------------------------------------------------------------
+7.1 Companion Sidecar Routes (`companion/src/routes.ts`, `proxy.ts`)
+- Add `BROWSER_ENGINE_SWITCH_ROUTE` (`POST /^\/api\/bots\/[\w-]+\/browser\/engine-switch$/`)
+  and `BROWSER_BATCH_ROUTE` (`POST /^\/api\/bots\/[\w-]+\/browser\/batch$/`) to
+  `ALLOWED` **and** `isBrowserControlAccess(method, path)` (`routes.ts:75-78`) so
+  `companion/src/proxy.ts` enforces per-device `browserControlAccess`, body size
+  limits, and instant mid-flight revocation (`browserRefusal()`).
+
+7.2 Web & Desktop UI Coordination (`src/`)
+- Coordinate [`src/components/BrowserSettingsRows.tsx`](file:///workspaces/OpenBot/src/components/BrowserSettingsRows.tsx#L58-L99)
+  (engine selector `"agent-browser" | "chrome" | "dual"`),
+  [`src/components/BrowserPanel.tsx`](file:///workspaces/OpenBot/src/components/BrowserPanel.tsx#L40-L43),
+  [`src/components/ComputerPanel.tsx`](file:///workspaces/OpenBot/src/components/ComputerPanel.tsx#L659-L667)
+  (`useComputerTakeover` / inline `LiveDesktop`), and
+  [`src/components/remote-desktop-panel.tsx`](file:///workspaces/OpenBot/src/components/remote-desktop-panel.tsx#L78-L210)
+  (cloud/VPS `desktop` vs `browser` view + `window.ogb?.desktopViewer`).
+
+7.3 Android Mobile Client & Takeover Path (`android/`)
+- Add `switchBrowserEngine(botId, engine, url?)` in
+  `android/core/src/main/kotlin/com/openmausbot/companion/core/Client.kt`
+  calling `POST /api/bots/${segment(botId)}/browser/engine-switch`, and optional
+  `engine: String? = null` on `BrowserStatus` in `BrowserLiveClient.kt`.
+- Wire takeover toggle in `BrowserControlScreen.kt`.
+- Takeover Transport Decision (Resolving `CloudDesktopBrowser.kt` Incompatibility):
+  - Option A (Recommended): Keep Android interactive browser takeover on
+    `BrowserControlScreen.kt` (existing SSE `/browser/live` + `/browser/action`
+    + new `/browser/engine-switch`), avoiding Custom Tabs auth/Origin blocks.
+  - Option B (If launching noVNC via `CloudDesktopBrowser.kt`): Either resolve
+    `/vps-viewer/<id>/vnc.html#...` through a local Android loopback HTTP/WS
+    proxy that injects `Authorization: Bearer <token>` and strips `Origin`
+    (adapting `CloudDesktopSessionSerializer` in `Models.kt:746-753` cleanly),
+    or do not use `CustomTabsIntent` for companion-proxied `/vps-viewer/` paths.
+- Create `CloudDesktopBrowserTest.kt` and update `BrowserControlWiringTest.kt`
+  + `companion/test/routes.test.ts`.
+
+
+8. PHASE 5: END-TO-END VERIFICATION MATRIX, OPEN PREREQUISITES & ROLLBACK
+--------------------------------------------------------------------------------
+8.1 Open Prerequisites Before Implementation Starts
+1. Pin exact `h4ckf0r0day/obscura` (`v0.2.6+`) release commit/tarballs, Linux
+   `x86_64`/`aarch64` + macOS + Windows SHA-256 digests, and license file.
+2. Inspect `obscura mcp` `tools/list` output to confirm whether `agent_browser_*`
+   aliases / `browser_batch` exist natively or need translation in `ObscuraClient`.
+3. Confirm `obscura` Windows child-process stdio inheritance behavior and
+   QtWebEngine `--no-sandbox` startup inside both Docker and Podman.
+4. Decide Android takeover transport (Option A `BrowserControlScreen.kt` SSE vs.
+   Option B local loopback proxy for `CloudDesktopBrowser.kt`).
+
+8.2 Verification Gates (Isolated Fixtures Only)
+- Gate 0 (Security): `npx vitest run server/bot-box/env.test.ts server/config.test.ts`
+- Gate 1 (Windows Static Link):
+  `x86_64-w64-mingw32-objdump -p dist-native/browser/win32-x64/obscura.exe | grep "DLL Name"`
+  -> Only `kernel32.dll`, `user32.dll`, `ntdll.dll` (zero MinGW DLLs).
+- Gate 2 (Bundle Smoke):
+  `node scripts/smoke-browser-bundle.mjs --resources <abs-dist-native> --target=win32-x64 --engine=obscura`
+  -> Cold-start `< 50 ms`, CDP `/json/version` ready, RSS `< 60 MB`, clean exit.
+- Gate 3 (Linux Container Readiness):
+  - `docker inspect` confirms `com.openbot.image-layer="8"`, `com.openbot.local-vm="1"`.
+  - `docker exec -u cua -e DISPLAY=:1 <c> xwininfo -root` exits 0.
+  - `docker exec -u cua <c> curl -sf http://127.0.0.1:9222/json/version` (Obscura).
+  - `docker exec -u cua <c> curl -sf http://127.0.0.1:9223/json/version` (Qutebrowser).
+  - Unix socket probe to `/run/user/1000/openbot-qute-bridge.sock` (`{"action":"health"}`)
+    returns `{"ok": true, ...}`.
+  - `docker-image.test.ts` passes (`npmInstall` counts + `/tmp/` allowlist intact).
+- Gate 4 (Server / Companion / Shutdown):
+  `npx vitest run server/computer-tool-list.test.ts server/browser/*.test.ts server/host/browser-reclaim.test.ts server/graceful-shutdown.test.ts server/crash-guard.test.ts companion/test/*.test.ts`
+- Gate 5 (Android):
+  `./gradlew :android:core:test :android:app:testDebugUnitTest --tests "*CloudDesktopBrowserTest*" --tests "*BrowserControlWiringTest*"`
+
+8.3 Per-Phase Rollback Triggers
+- Phase 0: Any `OPENBOT_*` secret leaks into `bot-box` or breaks `connector-proxy`
+  -> revert `env.ts`.
+- Phase 1: Container OOM, `DISPLAY=:1` failure, or QtWebEngine sandbox crash
+  -> revert `IMAGE_LAYER_VERSION` to `"7"`.
+- Phase 2: Orphaned browser PIDs, `v1` SSE regression, or shutdown `> 8s`
+  -> `PATCH /api/config` engine back to `"agent-browser"`.
+- Phase 3: `0xc0000135` DLL dependency or `afterPack` manifest failure
+  -> keep `agent-browser` + Chrome fallback.
+- Phase 4: Takeover lease leak or companion capability bypass
+  -> disable Dual-Engine UI toggle and revoke route flags.
+================================================================================
